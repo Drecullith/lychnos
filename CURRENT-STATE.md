@@ -121,6 +121,20 @@ Implemented:
 - Disabled fails closed
 - explicit re-enable operation
 
+### Audited runtime-mode transitions
+
+Implemented:
+
+- orchestrator-owned audited transitions into Game Mode
+- orchestrator-owned audited transition to Disabled
+- explicit audited re-enable to Normal
+- `RuntimeModeChanged` security audit records
+- structured `operation`, `from`, `to`, and `changed` audit details
+- auditing of no-op and fail-closed transition requests
+- end-to-end proof that disabling Lychnos blocks the next processing cycle and records both the mode transition and blocked permission decision
+
+The `RuntimeController` remains the authority for state changes; the orchestrator adds the audit boundary around those transitions.
+
 ### Mock execution boundary
 
 Implemented:
@@ -256,7 +270,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-51
+56
 ```
 
 Current quality gate:
@@ -291,6 +305,7 @@ Accepted ADRs currently cover:
 0012 Foundation simulation pipeline
 0013 ID and time provider abstractions
 0014 Foundation runtime orchestrator
+0015 Audited runtime mode transitions
 ```
 
 ## Intentionally Mocked
@@ -375,10 +390,9 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. audit runtime-mode transitions
-2. improve configuration loading boundaries
-3. introduce mock collectors
-4. expand canonical project documentation
+1. improve configuration loading boundaries
+2. introduce mock collectors
+3. expand canonical project documentation
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
