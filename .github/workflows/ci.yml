@@ -17,11 +17,11 @@ concurrency:
 jobs:
   rust:
     name: Rust quality gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Show Rust toolchain
         run: |
