@@ -5,6 +5,7 @@ pub mod audit;
 pub mod bus;
 pub mod config;
 pub mod event;
+pub mod executor;
 pub mod memory;
 pub mod permission;
 pub mod runtime;
