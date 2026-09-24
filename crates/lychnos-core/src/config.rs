@@ -1,0 +1,1 @@
+//! Lychnos configuration types.

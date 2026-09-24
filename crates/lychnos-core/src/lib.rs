@@ -1,5 +1,14 @@
 //! Platform-independent foundations for Project Lychnos.
 
+pub mod action;
+pub mod audit;
+pub mod bus;
+pub mod config;
+pub mod event;
+pub mod memory;
+pub mod permission;
+pub mod runtime;
+
 /// Canonical project name.
 pub const PROJECT_NAME: &str = "Lychnos";
 
