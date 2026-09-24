@@ -1,6 +1,7 @@
 //! Platform-independent foundations for Project Lychnos.
 
 pub mod action;
+pub mod analyzer;
 pub mod audit;
 pub mod bus;
 pub mod config;
