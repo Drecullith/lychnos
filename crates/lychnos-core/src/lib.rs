@@ -9,6 +9,7 @@ pub mod event;
 pub mod executor;
 pub mod memory;
 pub mod permission;
+pub mod providers;
 pub mod runtime;
 
 /// Canonical project name.

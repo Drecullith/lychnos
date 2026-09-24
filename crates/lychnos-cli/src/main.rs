@@ -1,11 +1,10 @@
 use lychnos_core::{
     analyzer::MockAnalyzer,
-    audit::{AuditId, AuditTimestamp, InMemoryAuditLog},
+    audit::InMemoryAuditLog,
     bus::InMemoryEventBus,
-    event::{
-        Event, EventId, EventKind, EventPayload, EventSource, EventTimestamp, Sensitivity, Severity,
-    },
+    event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{MockExecutionOutcome, MockExecutor},
+    providers::{IdProvider, SequenceIdProvider, SystemTimeProvider, TimeProvider},
     runtime::{RuntimeController, RuntimeMode},
 };
 
@@ -23,9 +22,12 @@ fn main() {
     let bus = InMemoryEventBus::new();
     let subscription = bus.subscribe();
 
+    let mut ids = SequenceIdProvider::default();
+    let clock = SystemTimeProvider;
+
     let event = Event {
-        id: EventId::new("cli-event-001"),
-        occurred_at: EventTimestamp::from_unix_millis(1_800_000_000_000),
+        id: ids.next_event_id(),
+        occurred_at: clock.event_timestamp(),
         source: EventSource::new("lychnos-cli"),
         kind: EventKind::new("simulation.event"),
         severity: Severity::Info,
@@ -67,8 +69,8 @@ fn main() {
             &proposal,
             &runtime,
             &mut audit,
-            AuditId::new("cli-audit-001"),
-            AuditTimestamp::from_unix_millis(1_800_000_000_001),
+            ids.next_audit_id(),
+            clock.audit_timestamp(),
         )
         .expect("in-memory audit append cannot fail");
 
