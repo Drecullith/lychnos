@@ -8,6 +8,7 @@ pub mod config;
 pub mod event;
 pub mod executor;
 pub mod memory;
+pub mod orchestrator;
 pub mod permission;
 pub mod providers;
 pub mod runtime;
