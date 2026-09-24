@@ -193,6 +193,19 @@ Implemented:
 
 Default cloud requests are disabled.
 
+### Configuration loading boundary
+
+Implemented:
+
+- generic `ConfigSource` interface
+- machine-independent `ConfigLoader`
+- explicit distinction between missing configuration and source failure
+- validated fallback to local-first defaults when no explicit configuration is supplied
+- separate source errors and parse/validation errors through `ConfigLoadError<E>`
+- deterministic in-memory configuration sources in tests
+
+The core still deliberately does not choose a permanent config path, environment-variable precedence, CLI override precedence, secrets storage, or live reload behavior.
+
 ### ID and time providers
 
 Implemented:
@@ -270,7 +283,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-56
+60
 ```
 
 Current quality gate:
@@ -306,6 +319,7 @@ Accepted ADRs currently cover:
 0013 ID and time provider abstractions
 0014 Foundation runtime orchestrator
 0015 Audited runtime mode transitions
+0016 Configuration loading boundary
 ```
 
 ## Intentionally Mocked
@@ -390,9 +404,8 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. improve configuration loading boundaries
-2. introduce mock collectors
-3. expand canonical project documentation
+1. introduce mock collectors
+2. expand canonical project documentation
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
