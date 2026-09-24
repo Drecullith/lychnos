@@ -53,6 +53,9 @@ Security Audit Record
 - committed `Cargo.lock`
 - `lychnos-core` library crate
 - `lychnos-cli` binary crate
+- GitHub Actions CI quality gate
+- CI pinned to Ubuntu 24.04
+- CI uses `actions/checkout@v7`
 
 ### Event model
 
@@ -193,6 +196,30 @@ Mock event
 
 Tests prove that Game Mode and Disabled mode block the flow at the authorization boundary.
 
+### CLI foundation simulation
+
+The `lychnos-cli` executable now drives the same machine-independent foundation pipeline from the terminal.
+
+Supported simulation modes:
+
+```text
+Normal    -> WOULD EXECUTE (mock only)
+GameMode  -> BLOCKED (GameMode)
+Disabled  -> BLOCKED (Disabled)
+```
+
+Each CLI simulation writes a security audit record.
+
+Example commands:
+
+```bash
+cargo run -p lychnos-cli
+cargo run -p lychnos-cli -- game
+cargo run -p lychnos-cli -- disabled
+```
+
+This remains a safe simulation. The CLI does not execute real system actions.
+
 ## Automated Tests
 
 Current expected test count:
@@ -211,6 +238,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 All currently pass.
+
+GitHub Actions runs the same quality gate automatically on pushes and pull requests into `main`, with manual workflow dispatch also available.
 
 ## Architecture Decision Records
 
@@ -312,14 +341,12 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. make the CLI drive the mock pipeline
-2. introduce reusable ID and time provider abstractions
-3. introduce an orchestration/runtime service above the individual modules
-4. audit runtime-mode transitions
-5. improve configuration loading boundaries
-6. introduce mock collectors
-7. establish CI
-8. expand canonical project documentation
+1. introduce reusable ID and time provider abstractions
+2. introduce an orchestration/runtime service above the individual modules
+3. audit runtime-mode transitions
+4. improve configuration loading boundaries
+5. introduce mock collectors
+6. expand canonical project documentation
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
