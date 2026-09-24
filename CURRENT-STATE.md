@@ -195,6 +195,21 @@ The CLI now uses provider-generated event and audit IDs and real system wall-clo
 
 The sequence provider is intentionally not the final globally unique multi-device ID strategy.
 
+### Foundation runtime orchestrator
+
+Implemented:
+
+- machine-independent `FoundationRuntime<I, T>`
+- runtime-owned event bus and internal subscription
+- runtime-owned safety controller
+- runtime-owned in-memory audit log
+- injected ID and time providers
+- `observe(...)` for creating and processing a normalized event
+- `process_event(...)` for already-normalized collector/adapter input
+- `FoundationCycle` result containing the event, proposal, execution outcome, publish report, and audit count
+
+The CLI now delegates the full foundation pipeline to `FoundationRuntime` instead of manually constructing the event bus, analyzer, runtime controller, executor, and audit flow itself.
+
 ### Foundation simulation
 
 Implemented and tested:
@@ -241,7 +256,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-47
+51
 ```
 
 Current quality gate:
@@ -275,6 +290,7 @@ Accepted ADRs currently cover:
 0011 Audited mock execution
 0012 Foundation simulation pipeline
 0013 ID and time provider abstractions
+0014 Foundation runtime orchestrator
 ```
 
 ## Intentionally Mocked
@@ -359,11 +375,10 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. introduce an orchestration/runtime service above the individual modules
-2. audit runtime-mode transitions
-3. improve configuration loading boundaries
-4. introduce mock collectors
-5. expand canonical project documentation
+1. audit runtime-mode transitions
+2. improve configuration loading boundaries
+3. introduce mock collectors
+4. expand canonical project documentation
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
