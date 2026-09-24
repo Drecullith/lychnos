@@ -2,7 +2,7 @@
 
 use crate::{
     action::{ActionImpact, ActionProposal},
-    runtime::RuntimeMode,
+    runtime::{RuntimeController, RuntimeMode},
 };
 
 /// Reason an action was denied before execution.
@@ -33,10 +33,17 @@ pub enum PermissionDecision {
 pub struct DefaultPermissionPolicy;
 
 impl DefaultPermissionPolicy {
-    /// Evaluates an action against the current Lychnos runtime mode.
+    /// Evaluates an action against the live Lychnos runtime safety state.
     #[must_use]
-    pub const fn evaluate(
+    pub fn evaluate(
         self,
+        proposal: &ActionProposal,
+        runtime: &RuntimeController,
+    ) -> PermissionDecision {
+        Self::evaluate_mode(proposal, runtime.mode())
+    }
+
+    const fn evaluate_mode(
         proposal: &ActionProposal,
         runtime_mode: RuntimeMode,
     ) -> PermissionDecision {
@@ -78,33 +85,61 @@ mod tests {
 
     #[test]
     fn normal_mode_allows_read_only_actions() {
-        let decision = DefaultPermissionPolicy
-            .evaluate(&proposal(ActionImpact::ReadOnly), RuntimeMode::Normal);
+        let runtime = RuntimeController::default();
+
+        let decision =
+            DefaultPermissionPolicy.evaluate(&proposal(ActionImpact::ReadOnly), &runtime);
 
         assert_eq!(decision, PermissionDecision::Allowed);
     }
 
     #[test]
     fn normal_mode_requires_approval_for_state_changes() {
-        let decision = DefaultPermissionPolicy
-            .evaluate(&proposal(ActionImpact::StateChanging), RuntimeMode::Normal);
+        let runtime = RuntimeController::default();
+
+        let decision =
+            DefaultPermissionPolicy.evaluate(&proposal(ActionImpact::StateChanging), &runtime);
 
         assert_eq!(decision, PermissionDecision::RequiresUserApproval);
     }
 
     #[test]
     fn game_mode_denies_actions() {
-        let decision = DefaultPermissionPolicy
-            .evaluate(&proposal(ActionImpact::ReadOnly), RuntimeMode::GameMode);
+        let runtime = RuntimeController::default();
+        runtime.enter_game_mode();
+
+        let decision =
+            DefaultPermissionPolicy.evaluate(&proposal(ActionImpact::ReadOnly), &runtime);
 
         assert_eq!(decision, PermissionDecision::Denied(DenialReason::GameMode));
     }
 
     #[test]
     fn disabled_mode_denies_actions() {
-        let decision = DefaultPermissionPolicy
-            .evaluate(&proposal(ActionImpact::ReadOnly), RuntimeMode::Disabled);
+        let runtime = RuntimeController::default();
+        runtime.disable();
+
+        let decision =
+            DefaultPermissionPolicy.evaluate(&proposal(ActionImpact::ReadOnly), &runtime);
 
         assert_eq!(decision, PermissionDecision::Denied(DenialReason::Disabled));
+    }
+
+    #[test]
+    fn disabling_runtime_changes_subsequent_permission_decisions() {
+        let runtime = RuntimeController::default();
+        let proposal = proposal(ActionImpact::ReadOnly);
+
+        assert_eq!(
+            DefaultPermissionPolicy.evaluate(&proposal, &runtime),
+            PermissionDecision::Allowed
+        );
+
+        runtime.disable();
+
+        assert_eq!(
+            DefaultPermissionPolicy.evaluate(&proposal, &runtime),
+            PermissionDecision::Denied(DenialReason::Disabled)
+        );
     }
 }
