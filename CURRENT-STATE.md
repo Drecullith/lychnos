@@ -179,6 +179,22 @@ Implemented:
 
 Default cloud requests are disabled.
 
+### ID and time providers
+
+Implemented:
+
+- generic `IdProvider`
+- typed ID generation for events, actions, audit records, memory records, and devices
+- deterministic `SequenceIdProvider` for tests and simulations
+- generic `TimeProvider`
+- deterministic `FixedTimeProvider` for tests
+- operating-system-backed `SystemTimeProvider`
+- typed event, audit, and memory timestamp helpers
+
+The CLI now uses provider-generated event and audit IDs and real system wall-clock time instead of hard-coded values.
+
+The sequence provider is intentionally not the final globally unique multi-device ID strategy.
+
 ### Foundation simulation
 
 Implemented and tested:
@@ -225,7 +241,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-44
+47
 ```
 
 Current quality gate:
@@ -258,6 +274,7 @@ Accepted ADRs currently cover:
 0010 Mock execution boundary
 0011 Audited mock execution
 0012 Foundation simulation pipeline
+0013 ID and time provider abstractions
 ```
 
 ## Intentionally Mocked
@@ -327,6 +344,7 @@ Still intentionally undecided:
 - UI toolkit
 - voice stack
 - portable synchronization protocol
+- production globally unique ID strategy
 - device identity format
 - at-rest encryption
 - privileged helper design
@@ -341,12 +359,11 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. introduce reusable ID and time provider abstractions
-2. introduce an orchestration/runtime service above the individual modules
-3. audit runtime-mode transitions
-4. improve configuration loading boundaries
-5. introduce mock collectors
-6. expand canonical project documentation
+1. introduce an orchestration/runtime service above the individual modules
+2. audit runtime-mode transitions
+3. improve configuration loading boundaries
+4. introduce mock collectors
+5. expand canonical project documentation
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
