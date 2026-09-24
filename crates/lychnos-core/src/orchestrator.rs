@@ -5,12 +5,12 @@ use std::sync::mpsc::TryRecvError;
 use crate::{
     action::ActionProposal,
     analyzer::MockAnalyzer,
-    audit::InMemoryAuditLog,
+    audit::{AuditDetails, AuditEventKind, AuditRecord, AuditSink, AuditValue, InMemoryAuditLog},
     bus::{EventSubscription, InMemoryEventBus, PublishReport},
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{MockExecutionOutcome, MockExecutor},
     providers::{IdProvider, TimeProvider},
-    runtime::{RuntimeController, RuntimeMode},
+    runtime::{RuntimeController, RuntimeMode, RuntimeTransition},
 };
 
 /// Result of processing one event through the foundation pipeline.
@@ -87,6 +87,49 @@ where
         &self.audit
     }
 
+    /// Enters Game Mode and records the requested runtime transition.
+    pub fn enter_game_mode(&mut self) -> RuntimeTransition {
+        let transition = self.runtime.enter_game_mode();
+        self.audit_runtime_transition("enter_game_mode", transition);
+        transition
+    }
+
+    /// Disables Lychnos and records the requested runtime transition.
+    pub fn disable(&mut self) -> RuntimeTransition {
+        let transition = self.runtime.disable();
+        self.audit_runtime_transition("disable", transition);
+        transition
+    }
+
+    /// Explicitly enables Normal mode and records the requested transition.
+    pub fn enable_normal(&mut self) -> RuntimeTransition {
+        let transition = self.runtime.enable_normal();
+        self.audit_runtime_transition("enable_normal", transition);
+        transition
+    }
+
+    fn audit_runtime_transition(&mut self, operation: &'static str, transition: RuntimeTransition) {
+        let record = AuditRecord::new(
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+            AuditEventKind::RuntimeModeChanged,
+            "foundation-runtime",
+            "Runtime mode transition requested",
+        )
+        .with_details(
+            AuditDetails::new()
+                .with_field("operation", AuditValue::Text(operation.into()))
+                .with_field("from", AuditValue::Text(format!("{:?}", transition.from)))
+                .with_field("to", AuditValue::Text(format!("{:?}", transition.to)))
+                .with_field("changed", AuditValue::Boolean(transition.changed)),
+        );
+
+        match self.audit.append(record) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+
     /// Creates and processes one normalized foundation event.
     pub fn observe(
         &mut self,
@@ -158,6 +201,146 @@ mod tests {
             SequenceIdProvider::default(),
             FixedTimeProvider::new(1_800_000_000_123),
         )
+    }
+
+    #[test]
+    fn entering_game_mode_is_audited() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let transition = runtime.enter_game_mode();
+
+        assert_eq!(transition.from, RuntimeMode::Normal);
+        assert_eq!(transition.to, RuntimeMode::GameMode);
+        assert!(transition.changed);
+        assert_eq!(runtime.mode(), RuntimeMode::GameMode);
+
+        let record = &runtime.audit_log().records()[0];
+
+        assert_eq!(record.kind, AuditEventKind::RuntimeModeChanged);
+        assert_eq!(record.actor, "foundation-runtime");
+        assert_eq!(
+            record.details.get("operation"),
+            Some(&AuditValue::Text("enter_game_mode".into()))
+        );
+        assert_eq!(
+            record.details.get("from"),
+            Some(&AuditValue::Text("Normal".into()))
+        );
+        assert_eq!(
+            record.details.get("to"),
+            Some(&AuditValue::Text("GameMode".into()))
+        );
+        assert_eq!(
+            record.details.get("changed"),
+            Some(&AuditValue::Boolean(true))
+        );
+    }
+
+    #[test]
+    fn disabling_from_game_mode_records_both_transitions() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        runtime.enter_game_mode();
+        let transition = runtime.disable();
+
+        assert_eq!(transition.from, RuntimeMode::GameMode);
+        assert_eq!(transition.to, RuntimeMode::Disabled);
+        assert!(transition.changed);
+        assert_eq!(runtime.mode(), RuntimeMode::Disabled);
+
+        assert_eq!(runtime.audit_log().len(), 2);
+        assert_eq!(
+            runtime.audit_log().records()[1].details.get("operation"),
+            Some(&AuditValue::Text("disable".into()))
+        );
+    }
+
+    #[test]
+    fn blocked_game_mode_request_while_disabled_is_audited() {
+        let mut runtime = runtime(RuntimeMode::Disabled);
+
+        let transition = runtime.enter_game_mode();
+
+        assert_eq!(transition.from, RuntimeMode::Disabled);
+        assert_eq!(transition.to, RuntimeMode::Disabled);
+        assert!(!transition.changed);
+
+        let record = &runtime.audit_log().records()[0];
+
+        assert_eq!(
+            record.details.get("changed"),
+            Some(&AuditValue::Boolean(false))
+        );
+        assert_eq!(
+            record.details.get("from"),
+            Some(&AuditValue::Text("Disabled".into()))
+        );
+        assert_eq!(
+            record.details.get("to"),
+            Some(&AuditValue::Text("Disabled".into()))
+        );
+    }
+
+    #[test]
+    fn explicit_enable_from_disabled_is_audited() {
+        let mut runtime = runtime(RuntimeMode::Disabled);
+
+        let transition = runtime.enable_normal();
+
+        assert_eq!(transition.from, RuntimeMode::Disabled);
+        assert_eq!(transition.to, RuntimeMode::Normal);
+        assert!(transition.changed);
+        assert_eq!(runtime.mode(), RuntimeMode::Normal);
+
+        assert_eq!(
+            runtime.audit_log().records()[0].details.get("operation"),
+            Some(&AuditValue::Text("enable_normal".into()))
+        );
+    }
+
+    #[test]
+    fn disabling_runtime_blocks_next_cycle_and_audits_both_events() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let transition = runtime.disable();
+
+        assert_eq!(transition.from, RuntimeMode::Normal);
+        assert_eq!(transition.to, RuntimeMode::Disabled);
+        assert!(transition.changed);
+
+        let cycle = runtime
+            .observe(
+                EventSource::new("test-source"),
+                EventKind::new("test.event"),
+                Severity::Info,
+                Sensitivity::Standard,
+                EventPayload::new(),
+            )
+            .expect("foundation event should process");
+
+        assert_eq!(
+            cycle.outcome,
+            MockExecutionOutcome::Blocked {
+                action_id: ActionId::new("action-for-event-000002"),
+                reason: DenialReason::Disabled,
+            }
+        );
+
+        assert_eq!(cycle.audit_records, 2);
+
+        let records = runtime.audit_log().records();
+
+        assert_eq!(records[0].kind, AuditEventKind::RuntimeModeChanged);
+        assert_eq!(
+            records[0].details.get("operation"),
+            Some(&AuditValue::Text("disable".into()))
+        );
+
+        assert_eq!(records[1].kind, AuditEventKind::PermissionEvaluated);
+        assert_eq!(
+            records[1].details.get("decision"),
+            Some(&AuditValue::Text("blocked_disabled".into()))
+        );
     }
 
     #[test]
