@@ -54,6 +54,56 @@ impl LychnosConfig {
     }
 }
 
+/// Source from which raw Lychnos configuration text can be loaded.
+///
+/// The core deliberately does not decide where configuration lives on disk.
+/// Platform and application adapters can implement this boundary later.
+pub trait ConfigSource {
+    type Error;
+
+    /// Loads optional TOML configuration text.
+    ///
+    /// Returning `None` means no explicit configuration was supplied and
+    /// Lychnos should use its validated defaults.
+    fn load(&self) -> Result<Option<String>, Self::Error>;
+}
+
+/// Failure while loading or validating configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigLoadError<E> {
+    /// The configuration source itself failed.
+    Source(E),
+
+    /// Configuration text was loaded but could not be parsed or validated.
+    Config(ConfigError),
+}
+
+/// Machine-independent configuration loading boundary.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConfigLoader;
+
+impl ConfigLoader {
+    /// Loads configuration from a source, falling back to validated defaults
+    /// when the source contains no explicit configuration.
+    pub fn load<S: ConfigSource>(
+        self,
+        source: &S,
+    ) -> Result<LychnosConfig, ConfigLoadError<S::Error>> {
+        let input = source.load().map_err(ConfigLoadError::Source)?;
+
+        match input {
+            Some(input) => LychnosConfig::from_toml(&input).map_err(ConfigLoadError::Config),
+            None => {
+                let config = LychnosConfig::default();
+
+                config.validate().map_err(ConfigLoadError::Config)?;
+
+                Ok(config)
+            }
+        }
+    }
+}
+
 /// Runtime-related configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -138,6 +188,103 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct StaticConfigSource {
+        input: Option<String>,
+    }
+
+    impl StaticConfigSource {
+        fn with_toml(input: &str) -> Self {
+            Self {
+                input: Some(input.into()),
+            }
+        }
+
+        fn empty() -> Self {
+            Self { input: None }
+        }
+    }
+
+    impl ConfigSource for StaticConfigSource {
+        type Error = &'static str;
+
+        fn load(&self) -> Result<Option<String>, Self::Error> {
+            Ok(self.input.clone())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingConfigSource;
+
+    impl ConfigSource for FailingConfigSource {
+        type Error = &'static str;
+
+        fn load(&self) -> Result<Option<String>, Self::Error> {
+            Err("source unavailable")
+        }
+    }
+
+    #[test]
+    fn config_loader_uses_defaults_when_source_is_empty() {
+        let config = ConfigLoader
+            .load(&StaticConfigSource::empty())
+            .expect("empty source should use defaults");
+
+        assert_eq!(config, LychnosConfig::default());
+    }
+
+    #[test]
+    fn config_loader_parses_explicit_source() {
+        let source = StaticConfigSource::with_toml(
+            r#"
+schema_version = 1
+
+[runtime]
+startup_mode = "disabled"
+
+[privacy]
+cloud_requests_enabled = true
+"#,
+        );
+
+        let config = ConfigLoader
+            .load(&source)
+            .expect("valid source should load");
+
+        assert_eq!(config.runtime.startup_mode, StartupMode::Disabled);
+        assert!(config.privacy.cloud_requests_enabled);
+    }
+
+    #[test]
+    fn config_loader_preserves_config_errors() {
+        let source = StaticConfigSource::with_toml(
+            r#"
+schema_version = 999
+"#,
+        );
+
+        let error = ConfigLoader
+            .load(&source)
+            .expect_err("unsupported schema must fail");
+
+        assert_eq!(
+            error,
+            ConfigLoadError::Config(ConfigError::UnsupportedSchemaVersion {
+                found: 999,
+                supported: CONFIG_SCHEMA_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn config_loader_preserves_source_errors() {
+        let error = ConfigLoader
+            .load(&FailingConfigSource)
+            .expect_err("source failure must propagate");
+
+        assert_eq!(error, ConfigLoadError::Source("source unavailable"));
+    }
 
     #[test]
     fn defaults_are_local_first() {
