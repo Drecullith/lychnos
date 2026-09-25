@@ -176,7 +176,8 @@ Implemented:
 
 - `ApprovalGrant` bound to the complete structured `ActionProposal`
 - crate-private approval-grant construction
-- public issuance through `FoundationRuntime::approve_action(...)`
+- approval-grant construction remains crate-private
+- approval grants are issued internally only after exact pending-proposal verification
 - explicit `ActionApproved` security-audit records
 - approving actor label captured in the approval audit record
 - action kind, capability, impact, and risk captured at approval time
@@ -206,7 +207,24 @@ Implemented:
 - runtime-blocked approved proposals remain pending
 - pending approval flow is covered by end-to-end runtime tests
 
-Pending actions are still in-memory only. Rejection/cancellation, expiry, persistence, and restart recovery are not implemented yet.
+Pending actions are still in-memory only. Expiry, persistence, restart recovery, and system-driven cancellation are not implemented yet.
+
+### Explicit pending action rejection
+
+Implemented:
+
+- `reject_pending_action(...)` for explicit negative consent
+- exact pending-proposal verification before rejection
+- unknown proposals cannot be rejected
+- stale proposals cannot reject newer replacements that reuse an action ID
+- successful rejection removes the pending proposal
+- dedicated `ActionRejected` security-audit records
+- rejecting actor label captured in the audit record
+- action kind, capability, impact, risk, action ID, and source-event context preserved
+- rejection remains available in Normal, Game Mode, and Disabled
+- pending removal occurs before audit append so future audit-storage failure cannot undo user refusal
+
+Rejection is intentionally distinct from future cancellation semantics.
 
 ### Security audit model
 
@@ -375,7 +393,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-85
+89
 ```
 
 Current quality gate:
@@ -417,6 +435,7 @@ Accepted ADRs currently cover:
 0019 Mandatory security audit and separate diagnostics
 0020 Bound action approval grants
 0021 Pending action approval runtime flow
+0022 Explicit pending action rejection
 ```
 
 ## Intentionally Mocked
@@ -501,12 +520,11 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. exercise the approval grant through an end-to-end runtime flow rather than only direct executor evaluation
-2. define rejection and cancellation behavior around pending approvals
-3. wire typed configuration into the application runtime
-4. integrate ordinary diagnostics without weakening the mandatory security audit
-5. add richer deterministic scenarios and failure injection
-6. define cancellation semantics for already-running work before any real executor exists
+1. define system-driven cancellation semantics separately from explicit user rejection
+2. wire typed configuration into the application runtime
+3. integrate ordinary diagnostics without weakening the mandatory security audit
+4. add richer deterministic scenarios and failure injection
+5. define cancellation semantics for already-running work before any real executor exists
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
