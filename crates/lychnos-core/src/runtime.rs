@@ -71,13 +71,24 @@ pub enum RuntimeWorkStartError {
     Disabled,
 }
 
-/// Cancellation lease held by work that has already started.
+/// Runtime request visible to work that has already started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeWorkRequest {
+    /// Work may continue normally.
+    Continue,
+    /// Game Mode requests that work cooperatively pause or quiesce.
+    PauseForGameMode,
+    /// Disabled requests permanent cooperative cancellation.
+    CancelForDisabled,
+}
+
+/// Runtime lease held by work that has already started.
+///
+/// Game Mode produces a reversible pause request. Returning to Normal clears
+/// that request for leases that have not crossed a Disabled transition.
 ///
 /// A transition into Disabled permanently invalidates leases that were issued
 /// before that transition. Returning to Normal does not revive old work.
-///
-/// Game Mode cancellation/pause semantics for already-running work remain
-/// intentionally separate from this Phase 2 boundary.
 #[derive(Debug, Clone)]
 pub struct RuntimeWorkLease {
     state: Arc<AtomicU64>,
@@ -85,13 +96,30 @@ pub struct RuntimeWorkLease {
 }
 
 impl RuntimeWorkLease {
-    /// Returns whether the work represented by this lease must stop.
+    /// Returns the current runtime request for this already-started work.
+    ///
+    /// Disabled cancellation takes precedence permanently. A Game Mode pause
+    /// request is reversible and only applies while the lease still belongs to
+    /// the current disable generation.
     #[must_use]
-    pub fn cancellation_requested(&self) -> bool {
+    pub fn request(&self) -> RuntimeWorkRequest {
         let state = self.state.load(Ordering::Acquire);
 
-        mode_from_state(state) == RuntimeMode::Disabled
+        if mode_from_state(state) == RuntimeMode::Disabled
             || disable_epoch_from_state(state) != self.disable_epoch
+        {
+            RuntimeWorkRequest::CancelForDisabled
+        } else if mode_from_state(state) == RuntimeMode::GameMode {
+            RuntimeWorkRequest::PauseForGameMode
+        } else {
+            RuntimeWorkRequest::Continue
+        }
+    }
+
+    /// Returns whether Disabled has permanently requested cancellation.
+    #[must_use]
+    pub fn cancellation_requested(&self) -> bool {
+        self.request() == RuntimeWorkRequest::CancelForDisabled
     }
 }
 
@@ -387,16 +415,35 @@ mod tests {
     }
 
     #[test]
+    fn game_mode_requests_reversible_pause_for_existing_work() {
+        let controller = RuntimeController::default();
+        let lease = controller
+            .try_begin_work()
+            .expect("Normal mode should issue work lease");
+
+        assert_eq!(lease.request(), RuntimeWorkRequest::Continue);
+
+        controller.enter_game_mode();
+
+        assert_eq!(lease.request(), RuntimeWorkRequest::PauseForGameMode);
+
+        controller.enable_normal();
+
+        assert_eq!(lease.request(), RuntimeWorkRequest::Continue);
+    }
+
+    #[test]
     fn disabling_requests_cancellation_for_existing_work() {
         let controller = RuntimeController::default();
         let lease = controller
             .try_begin_work()
             .expect("Normal mode should issue work lease");
 
-        assert!(!lease.cancellation_requested());
+        assert_eq!(lease.request(), RuntimeWorkRequest::Continue);
 
         controller.disable();
 
+        assert_eq!(lease.request(), RuntimeWorkRequest::CancelForDisabled);
         assert!(lease.cancellation_requested());
     }
 
@@ -431,5 +478,34 @@ mod tests {
 
         assert!(old.cancellation_requested());
         assert!(!fresh.cancellation_requested());
+    }
+
+    #[test]
+    fn disabled_cancellation_outranks_later_game_mode_for_old_work() {
+        let controller = RuntimeController::default();
+        let lease = controller
+            .try_begin_work()
+            .expect("Normal mode should issue work lease");
+
+        controller.disable();
+        controller.enable_normal();
+        controller.enter_game_mode();
+
+        assert_eq!(lease.request(), RuntimeWorkRequest::CancelForDisabled);
+    }
+
+    #[test]
+    fn disabling_from_game_mode_upgrades_pause_to_cancellation() {
+        let controller = RuntimeController::default();
+        let lease = controller
+            .try_begin_work()
+            .expect("Normal mode should issue work lease");
+
+        controller.enter_game_mode();
+        assert_eq!(lease.request(), RuntimeWorkRequest::PauseForGameMode);
+
+        controller.disable();
+
+        assert_eq!(lease.request(), RuntimeWorkRequest::CancelForDisabled);
     }
 }
