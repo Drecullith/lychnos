@@ -64,6 +64,33 @@ pub enum PendingActionError {
     ProposalChanged { action_id: ActionId },
 }
 
+/// Why the runtime cancelled a pending action without treating the event as
+/// explicit user rejection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingActionCancellationReason {
+    /// A newer, structurally different proposal reused the same action ID.
+    Superseded,
+
+    /// Runtime or policy state determined that the pending request is no
+    /// longer valid.
+    PolicyInvalidated,
+
+    /// A runtime lifecycle operation requires the pending request to end.
+    RuntimeLifecycle,
+}
+
+impl PendingActionCancellationReason {
+    /// Stable audit representation of the cancellation reason.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Superseded => "superseded",
+            Self::PolicyInvalidated => "policy_invalidated",
+            Self::RuntimeLifecycle => "runtime_lifecycle",
+        }
+    }
+}
+
 /// Machine-independent orchestration service used during the foundation phase.
 ///
 /// It deliberately uses the mock analyzer, mock executor, in-memory event bus,
@@ -205,6 +232,17 @@ where
     /// an exact matching proposal is approved successfully.
     #[must_use]
     pub fn evaluate_proposal(&mut self, proposal: &ActionProposal) -> MockExecutionOutcome {
+        if let Some(pending) = self.pending_actions.get(&proposal.id)
+            && pending != proposal
+        {
+            let superseded = pending.clone();
+
+            self.cancel_exact_pending_action(
+                &superseded,
+                PendingActionCancellationReason::Superseded,
+            );
+        }
+
         let outcome = match MockExecutor.evaluate_and_audit(
             proposal,
             &self.runtime,
@@ -296,6 +334,80 @@ where
         }
 
         Ok(outcome)
+    }
+
+    /// Cancels one exact pending proposal for a system-owned lifecycle or
+    /// policy reason.
+    ///
+    /// Cancellation is distinct from explicit user rejection and therefore
+    /// uses a dedicated audit event and a runtime-owned actor.
+    ///
+    /// The exact stored proposal must still match, preventing stale system
+    /// work from cancelling a newer replacement that reused the same action ID.
+    pub fn cancel_pending_action(
+        &mut self,
+        proposal: &ActionProposal,
+        reason: PendingActionCancellationReason,
+    ) -> Result<(), PendingActionError> {
+        let Some(pending) = self.pending_actions.get(&proposal.id) else {
+            return Err(PendingActionError::NotPending {
+                action_id: proposal.id.clone(),
+            });
+        };
+
+        if pending != proposal {
+            return Err(PendingActionError::ProposalChanged {
+                action_id: proposal.id.clone(),
+            });
+        }
+
+        let pending = pending.clone();
+        self.cancel_exact_pending_action(&pending, reason);
+
+        Ok(())
+    }
+
+    fn cancel_exact_pending_action(
+        &mut self,
+        proposal: &ActionProposal,
+        reason: PendingActionCancellationReason,
+    ) {
+        self.pending_actions.remove(&proposal.id);
+
+        let mut record = AuditRecord::new(
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+            AuditEventKind::ActionCancelled,
+            "foundation-runtime",
+            "Pending action cancelled by runtime",
+        )
+        .with_action(proposal.id.clone())
+        .with_details(
+            AuditDetails::new()
+                .with_field(
+                    "cancellation_reason",
+                    AuditValue::Text(reason.as_str().into()),
+                )
+                .with_field(
+                    "action_kind",
+                    AuditValue::Text(proposal.kind.as_str().into()),
+                )
+                .with_field(
+                    "capability",
+                    AuditValue::Text(proposal.capability.as_str().into()),
+                )
+                .with_field("impact", AuditValue::Text(format!("{:?}", proposal.impact)))
+                .with_field("risk", AuditValue::Text(format!("{:?}", proposal.risk))),
+        );
+
+        if let Some(event_id) = &proposal.source_event_id {
+            record = record.with_event(event_id.clone());
+        }
+
+        match self.audit.append(record) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
     }
 
     /// Rejects one exact pending proposal.
@@ -834,6 +946,199 @@ mod tests {
         );
 
         assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn exact_pending_action_can_be_cancelled_by_system() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-system-cancel");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        runtime
+            .cancel_pending_action(
+                &proposal,
+                PendingActionCancellationReason::PolicyInvalidated,
+            )
+            .expect("exact pending proposal should be cancellable");
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let last = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("cancellation should be audited");
+
+        assert_eq!(last.kind, AuditEventKind::ActionCancelled);
+        assert_eq!(last.actor, "foundation-runtime");
+        assert_eq!(
+            last.details.get("cancellation_reason"),
+            Some(&AuditValue::Text("policy_invalidated".into()))
+        );
+    }
+
+    #[test]
+    fn superseding_proposal_cancels_previous_pending_action() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let original = state_changing_proposal("action-superseded");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&original),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let replacement = ActionProposal::new(
+            ActionId::new("action-superseded"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::High,
+            "Replacement proposal",
+            "test-analyzer",
+        )
+        .with_source_event(EventId::new("event-replacement"));
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&replacement),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        assert_eq!(runtime.pending_action(&replacement.id), Some(&replacement));
+
+        let cancellation = runtime
+            .audit_log()
+            .records()
+            .iter()
+            .find(|record| record.kind == AuditEventKind::ActionCancelled)
+            .expect("superseded proposal should be audited as cancelled");
+
+        assert_eq!(
+            cancellation.details.get("cancellation_reason"),
+            Some(&AuditValue::Text("superseded".into()))
+        );
+
+        assert_eq!(
+            cancellation.event_id.as_ref().map(EventId::as_str),
+            Some("event-for-action-superseded")
+        );
+    }
+
+    #[test]
+    fn stale_proposal_cannot_cancel_replacement() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let original = state_changing_proposal("action-cancel-stale");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&original),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let replacement = ActionProposal::new(
+            ActionId::new("action-cancel-stale"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::High,
+            "Replacement proposal",
+            "test-analyzer",
+        )
+        .with_source_event(EventId::new("event-cancel-replacement"));
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&replacement),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let cancellations_before = runtime
+            .audit_log()
+            .records()
+            .iter()
+            .filter(|record| record.kind == AuditEventKind::ActionCancelled)
+            .count();
+
+        let error = runtime
+            .cancel_pending_action(
+                &original,
+                PendingActionCancellationReason::PolicyInvalidated,
+            )
+            .expect_err("stale proposal must not cancel its replacement");
+
+        assert_eq!(
+            error,
+            PendingActionError::ProposalChanged {
+                action_id: ActionId::new("action-cancel-stale"),
+            }
+        );
+
+        assert_eq!(runtime.pending_action(&original.id), Some(&replacement));
+
+        let cancellations_after = runtime
+            .audit_log()
+            .records()
+            .iter()
+            .filter(|record| record.kind == AuditEventKind::ActionCancelled)
+            .count();
+
+        assert_eq!(cancellations_after, cancellations_before);
+    }
+
+    #[test]
+    fn unknown_proposal_cannot_be_cancelled() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-cancel-unknown");
+
+        let error = runtime
+            .cancel_pending_action(
+                &proposal,
+                PendingActionCancellationReason::PolicyInvalidated,
+            )
+            .expect_err("unknown proposal must not be cancellable");
+
+        assert_eq!(
+            error,
+            PendingActionError::NotPending {
+                action_id: ActionId::new("action-cancel-unknown"),
+            }
+        );
+
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn system_cancellation_remains_available_while_disabled() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-cancel-disabled");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        runtime.disable();
+
+        runtime
+            .cancel_pending_action(&proposal, PendingActionCancellationReason::RuntimeLifecycle)
+            .expect("Disabled must not trap a system-cancelled pending action");
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let last = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("runtime cancellation should be audited");
+
+        assert_eq!(last.kind, AuditEventKind::ActionCancelled);
+        assert_eq!(
+            last.details.get("cancellation_reason"),
+            Some(&AuditValue::Text("runtime_lifecycle".into()))
+        );
     }
 
     #[test]
