@@ -191,6 +191,23 @@ The current `approved_by` field is only a caller-supplied actor label. It is not
 
 No real system execution is introduced by the approval flow.
 
+### Pending action approval runtime flow
+
+Implemented:
+
+- runtime-owned in-memory pending-action store
+- `evaluate_proposal(...)` retains proposals that require approval
+- exact pending proposal lookup by `ActionId`
+- `approve_pending_action(...)` rejects unknown proposals
+- stale or modified proposals are rejected before approval issuance
+- approval grant issuance is internal to the runtime
+- approved proposals are re-checked against live runtime safety
+- successful mock advancement removes the proposal from pending state
+- runtime-blocked approved proposals remain pending
+- pending approval flow is covered by end-to-end runtime tests
+
+Pending actions are still in-memory only. Rejection/cancellation, expiry, persistence, and restart recovery are not implemented yet.
+
 ### Security audit model
 
 Implemented:
@@ -358,7 +375,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-81
+85
 ```
 
 Current quality gate:
@@ -399,6 +416,7 @@ Accepted ADRs currently cover:
 0018 Runtime-aware collector suppression
 0019 Mandatory security audit and separate diagnostics
 0020 Bound action approval grants
+0021 Pending action approval runtime flow
 ```
 
 ## Intentionally Mocked
