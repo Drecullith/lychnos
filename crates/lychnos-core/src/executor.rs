@@ -2,6 +2,7 @@
 
 use crate::{
     action::{ActionId, ActionProposal},
+    approval::ApprovalGrant,
     audit::{
         AuditDetails, AuditEventKind, AuditId, AuditRecord, AuditSink, AuditTimestamp, AuditValue,
     },
@@ -50,6 +51,27 @@ impl MockExecutionOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalState {
+    NotRequired,
+    Missing,
+    Matched,
+    Mismatched,
+    RuntimeBlocked,
+}
+
+impl ApprovalState {
+    const fn audit_label(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::Missing => "missing",
+            Self::Matched => "matched",
+            Self::Mismatched => "mismatched",
+            Self::RuntimeBlocked => "runtime_blocked",
+        }
+    }
+}
+
 /// Foundation-phase executor that never performs real system actions.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MockExecutor;
@@ -62,21 +84,67 @@ impl MockExecutor {
         proposal: &ActionProposal,
         runtime: &RuntimeController,
     ) -> MockExecutionOutcome {
+        self.evaluate_internal(proposal, runtime, None).0
+    }
+
+    /// Evaluates an action using one explicit approval grant.
+    ///
+    /// The grant is consumed by this call. Runtime safety is evaluated before
+    /// approval matching, so a grant cannot bypass Game Mode or Disabled.
+    #[must_use]
+    pub fn evaluate_with_approval(
+        self,
+        proposal: &ActionProposal,
+        runtime: &RuntimeController,
+        approval: ApprovalGrant,
+    ) -> MockExecutionOutcome {
+        self.evaluate_internal(proposal, runtime, Some(&approval)).0
+    }
+
+    fn evaluate_internal(
+        self,
+        proposal: &ActionProposal,
+        runtime: &RuntimeController,
+        approval: Option<&ApprovalGrant>,
+    ) -> (MockExecutionOutcome, ApprovalState) {
         match DefaultPermissionPolicy.evaluate(proposal, runtime) {
-            PermissionDecision::Allowed => MockExecutionOutcome::WouldExecute {
-                action_id: proposal.id.clone(),
-            },
-
-            PermissionDecision::RequiresUserApproval => {
-                MockExecutionOutcome::AwaitingUserApproval {
+            PermissionDecision::Allowed => (
+                MockExecutionOutcome::WouldExecute {
                     action_id: proposal.id.clone(),
-                }
-            }
+                },
+                ApprovalState::NotRequired,
+            ),
 
-            PermissionDecision::Denied(reason) => MockExecutionOutcome::Blocked {
-                action_id: proposal.id.clone(),
-                reason,
+            PermissionDecision::RequiresUserApproval => match approval {
+                Some(grant) if grant.matches(proposal) => (
+                    MockExecutionOutcome::WouldExecute {
+                        action_id: proposal.id.clone(),
+                    },
+                    ApprovalState::Matched,
+                ),
+
+                Some(_) => (
+                    MockExecutionOutcome::AwaitingUserApproval {
+                        action_id: proposal.id.clone(),
+                    },
+                    ApprovalState::Mismatched,
+                ),
+
+                None => (
+                    MockExecutionOutcome::AwaitingUserApproval {
+                        action_id: proposal.id.clone(),
+                    },
+                    ApprovalState::Missing,
+                ),
             },
+
+            PermissionDecision::Denied(reason) => (
+                MockExecutionOutcome::Blocked {
+                    action_id: proposal.id.clone(),
+                    reason,
+                },
+                ApprovalState::RuntimeBlocked,
+            ),
         }
     }
 
@@ -89,7 +157,39 @@ impl MockExecutor {
         audit_id: AuditId,
         occurred_at: AuditTimestamp,
     ) -> Result<MockExecutionOutcome, S::Error> {
-        let outcome = self.evaluate(proposal, runtime);
+        self.evaluate_and_audit_internal(proposal, runtime, None, audit, audit_id, occurred_at)
+    }
+
+    /// Evaluates an action with explicit approval and audits the result.
+    pub fn evaluate_with_approval_and_audit<S: AuditSink>(
+        self,
+        proposal: &ActionProposal,
+        runtime: &RuntimeController,
+        approval: ApprovalGrant,
+        audit: &mut S,
+        audit_id: AuditId,
+        occurred_at: AuditTimestamp,
+    ) -> Result<MockExecutionOutcome, S::Error> {
+        self.evaluate_and_audit_internal(
+            proposal,
+            runtime,
+            Some(&approval),
+            audit,
+            audit_id,
+            occurred_at,
+        )
+    }
+
+    fn evaluate_and_audit_internal<S: AuditSink>(
+        self,
+        proposal: &ActionProposal,
+        runtime: &RuntimeController,
+        approval: Option<&ApprovalGrant>,
+        audit: &mut S,
+        audit_id: AuditId,
+        occurred_at: AuditTimestamp,
+    ) -> Result<MockExecutionOutcome, S::Error> {
+        let (outcome, approval_state) = self.evaluate_internal(proposal, runtime, approval);
 
         let mut record = AuditRecord::new(
             audit_id,
@@ -101,7 +201,11 @@ impl MockExecutor {
         .with_action(proposal.id.clone())
         .with_details(
             AuditDetails::new()
-                .with_field("decision", AuditValue::Text(outcome.audit_label().into())),
+                .with_field("decision", AuditValue::Text(outcome.audit_label().into()))
+                .with_field(
+                    "approval",
+                    AuditValue::Text(approval_state.audit_label().into()),
+                ),
         );
 
         if let Some(event_id) = &proposal.source_event_id {
@@ -260,6 +364,97 @@ mod tests {
         assert_eq!(
             audit.records()[0].details.get("decision"),
             Some(&AuditValue::Text("awaiting_user_approval".into()))
+        );
+    }
+
+    #[test]
+    fn exact_approval_allows_state_changing_action() {
+        let runtime = RuntimeController::default();
+        let proposal = proposal("action-008", ActionImpact::StateChanging);
+        let approval = ApprovalGrant::new(&proposal, "user");
+
+        let outcome = MockExecutor.evaluate_with_approval(&proposal, &runtime, approval);
+
+        assert_eq!(
+            outcome,
+            MockExecutionOutcome::WouldExecute {
+                action_id: ActionId::new("action-008"),
+            }
+        );
+    }
+
+    #[test]
+    fn mismatched_approval_does_not_authorize_action() {
+        let runtime = RuntimeController::default();
+
+        let original = proposal("action-009", ActionImpact::StateChanging);
+        let approval = ApprovalGrant::new(&original, "user");
+
+        let changed = ActionProposal::new(
+            ActionId::new("action-009"),
+            ActionKind::new("mock.changed"),
+            Capability::new("mock.capability"),
+            ActionImpact::StateChanging,
+            ActionRisk::Low,
+            "Changed after approval",
+            "test",
+        );
+
+        let outcome = MockExecutor.evaluate_with_approval(&changed, &runtime, approval);
+
+        assert_eq!(
+            outcome,
+            MockExecutionOutcome::AwaitingUserApproval {
+                action_id: ActionId::new("action-009"),
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_disable_overrides_existing_approval() {
+        let runtime = RuntimeController::default();
+        let proposal = proposal("action-010", ActionImpact::StateChanging);
+        let approval = ApprovalGrant::new(&proposal, "user");
+
+        runtime.disable();
+
+        let outcome = MockExecutor.evaluate_with_approval(&proposal, &runtime, approval);
+
+        assert_eq!(
+            outcome,
+            MockExecutionOutcome::Blocked {
+                action_id: ActionId::new("action-010"),
+                reason: DenialReason::Disabled,
+            }
+        );
+    }
+
+    #[test]
+    fn matched_approval_is_recorded_in_security_audit() {
+        let runtime = RuntimeController::default();
+        let mut audit = InMemoryAuditLog::new();
+
+        let proposal = proposal("action-011", ActionImpact::StateChanging);
+        let approval = ApprovalGrant::new(&proposal, "user");
+
+        MockExecutor
+            .evaluate_with_approval_and_audit(
+                &proposal,
+                &runtime,
+                approval,
+                &mut audit,
+                AuditId::new("audit-011"),
+                AuditTimestamp::from_unix_millis(11),
+            )
+            .expect("in-memory audit append cannot fail");
+
+        assert_eq!(
+            audit.records()[0].details.get("approval"),
+            Some(&AuditValue::Text("matched".into()))
+        );
+        assert_eq!(
+            audit.records()[0].details.get("decision"),
+            Some(&AuditValue::Text("would_execute".into()))
         );
     }
 

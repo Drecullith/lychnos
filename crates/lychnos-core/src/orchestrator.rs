@@ -5,6 +5,7 @@ use std::sync::mpsc::TryRecvError;
 use crate::{
     action::ActionProposal,
     analyzer::MockAnalyzer,
+    approval::ApprovalGrant,
     audit::{AuditDetails, AuditEventKind, AuditRecord, AuditSink, AuditValue, InMemoryAuditLog},
     bus::{EventSubscription, InMemoryEventBus, PublishReport},
     collector::Collector,
@@ -96,6 +97,53 @@ where
     #[must_use]
     pub fn audit_log(&self) -> &InMemoryAuditLog {
         &self.audit
+    }
+
+    /// Records explicit user approval for one exact action proposal.
+    ///
+    /// The returned grant is bound to the complete proposal. Callers cannot
+    /// construct grants directly; this runtime boundary is the foundation
+    /// issuance path after a trusted interaction layer has confirmed consent.
+    #[must_use]
+    pub fn approve_action(
+        &mut self,
+        proposal: &ActionProposal,
+        approved_by: impl Into<String>,
+    ) -> ApprovalGrant {
+        let approved_by = approved_by.into();
+
+        let mut record = AuditRecord::new(
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+            AuditEventKind::ActionApproved,
+            approved_by.clone(),
+            "Action proposal explicitly approved",
+        )
+        .with_action(proposal.id.clone())
+        .with_details(
+            AuditDetails::new()
+                .with_field(
+                    "action_kind",
+                    AuditValue::Text(proposal.kind.as_str().into()),
+                )
+                .with_field(
+                    "capability",
+                    AuditValue::Text(proposal.capability.as_str().into()),
+                )
+                .with_field("impact", AuditValue::Text(format!("{:?}", proposal.impact)))
+                .with_field("risk", AuditValue::Text(format!("{:?}", proposal.risk))),
+        );
+
+        if let Some(event_id) = &proposal.source_event_id {
+            record = record.with_event(event_id.clone());
+        }
+
+        match self.audit.append(record) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+
+        ApprovalGrant::new(proposal, approved_by)
     }
 
     /// Enters Game Mode and records the requested runtime transition.
@@ -223,7 +271,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        action::ActionId,
+        action::{ActionId, ActionImpact, ActionKind, ActionProposal, ActionRisk, Capability},
         collector::MockCollector,
         event::{EventId, EventTimestamp},
         permission::DenialReason,
@@ -236,6 +284,53 @@ mod tests {
             SequenceIdProvider::default(),
             FixedTimeProvider::new(1_800_000_000_123),
         )
+    }
+
+    #[test]
+    fn runtime_issues_bound_approval_and_audits_it() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let proposal = ActionProposal::new(
+            ActionId::new("action-approved"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::Moderate,
+            "Write a configuration file",
+            "test-analyzer",
+        )
+        .with_source_event(EventId::new("event-approved"));
+
+        let grant = runtime.approve_action(&proposal, "local-user");
+
+        assert!(grant.matches(&proposal));
+        assert_eq!(grant.action_id().as_str(), "action-approved");
+        assert_eq!(grant.approved_by(), "local-user");
+
+        let record = &runtime.audit_log().records()[0];
+
+        assert_eq!(record.kind, AuditEventKind::ActionApproved);
+        assert_eq!(record.actor, "local-user");
+
+        assert_eq!(
+            record.action_id.as_ref().map(ActionId::as_str),
+            Some("action-approved")
+        );
+
+        assert_eq!(
+            record.event_id.as_ref().map(EventId::as_str),
+            Some("event-approved")
+        );
+
+        assert_eq!(
+            record.details.get("action_kind"),
+            Some(&AuditValue::Text("file.write".into()))
+        );
+
+        assert_eq!(
+            record.details.get("capability"),
+            Some(&AuditValue::Text("file.write".into()))
+        );
     }
 
     #[test]

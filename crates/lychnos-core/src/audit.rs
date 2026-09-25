@@ -45,6 +45,7 @@ impl AuditTimestamp {
 pub enum AuditEventKind {
     EventObserved,
     ActionProposed,
+    ActionApproved,
     PermissionEvaluated,
     RuntimeModeChanged,
     ActionExecutionAttempted,

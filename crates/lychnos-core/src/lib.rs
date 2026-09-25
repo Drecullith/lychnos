@@ -2,6 +2,7 @@
 
 pub mod action;
 pub mod analyzer;
+pub mod approval;
 pub mod audit;
 pub mod bus;
 pub mod collector;
