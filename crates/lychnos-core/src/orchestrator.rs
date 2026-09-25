@@ -481,9 +481,18 @@ where
             return Ok(None);
         }
 
-        let event = collector
-            .collect()
-            .map_err(CollectorCycleError::Collector)?;
+        let event = match collector.collect() {
+            Ok(event) => event,
+            Err(error) => {
+                self.emit_diagnostic(
+                    DiagnosticLevel::Error,
+                    "collector",
+                    "Collector returned an error",
+                );
+
+                return Err(CollectorCycleError::Collector(error));
+            }
+        };
 
         let Some(event) = event else {
             return Ok(None);
@@ -522,7 +531,9 @@ mod tests {
     use super::*;
     use crate::{
         action::{ActionId, ActionImpact, ActionKind, ActionProposal, ActionRisk, Capability},
-        collector::MockCollector,
+        collector::{
+            InjectedCollectorError, MockCollector, ScriptedCollector, ScriptedCollectorStep,
+        },
         event::{EventId, EventTimestamp},
         permission::DenialReason,
         providers::{FixedTimeProvider, SequenceIdProvider},
@@ -1313,6 +1324,82 @@ mod tests {
             .expect("queued event should now be processed");
 
         assert_eq!(cycle.event.id.as_str(), "collector-event-resumed");
+        assert!(collector.is_empty());
+    }
+
+    #[test]
+    fn scripted_collector_failure_is_diagnosed_and_preserved() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let injected = InjectedCollectorError::new("deterministic failure");
+
+        let mut collector =
+            ScriptedCollector::from_steps([ScriptedCollectorStep::Error(injected.clone())]);
+
+        let error = runtime
+            .collect_once(&mut collector)
+            .expect_err("scripted collector should fail");
+
+        assert_eq!(error, CollectorCycleError::Collector(injected));
+
+        let diagnostic = runtime
+            .diagnostics_log()
+            .records()
+            .last()
+            .expect("collector failure should emit a diagnostic");
+
+        assert_eq!(diagnostic.level, DiagnosticLevel::Error);
+        assert_eq!(diagnostic.component, "collector");
+        assert_eq!(diagnostic.message, "Collector returned an error");
+
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn scripted_collector_recovers_after_injected_failure() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let recovered_event = Event {
+            id: EventId::new("event-recovered"),
+            occurred_at: EventTimestamp::from_unix_millis(1_800_000_000_123),
+            source: EventSource::new("scripted-collector"),
+            kind: EventKind::new("simulation.recovered"),
+            severity: Severity::Info,
+            sensitivity: Sensitivity::Standard,
+            correlation_id: None,
+            payload: EventPayload::new(),
+        };
+
+        let mut collector = ScriptedCollector::from_steps([
+            ScriptedCollectorStep::Empty,
+            ScriptedCollectorStep::Error(InjectedCollectorError::new("temporary failure")),
+            ScriptedCollectorStep::Event(recovered_event),
+        ]);
+
+        assert!(
+            runtime
+                .collect_once(&mut collector)
+                .expect("empty step should not fail")
+                .is_none()
+        );
+
+        assert!(matches!(
+            runtime.collect_once(&mut collector),
+            Err(CollectorCycleError::Collector(_))
+        ));
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("collector should recover")
+            .expect("recovery event should be processed");
+
+        assert_eq!(cycle.event.id.as_str(), "event-recovered");
+        assert_eq!(cycle.event.kind.as_str(), "simulation.recovered");
+        assert!(matches!(
+            cycle.outcome,
+            MockExecutionOutcome::WouldExecute { .. }
+        ));
+
         assert!(collector.is_empty());
     }
 
