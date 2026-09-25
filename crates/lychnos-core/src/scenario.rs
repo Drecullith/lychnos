@@ -5,17 +5,43 @@
 //! Phase 2 can exercise stateful behavior across multiple steps.
 
 use crate::{
+    action::ActionProposal,
     collector::Collector,
-    orchestrator::{CollectorCycleError, FoundationCycle, FoundationRuntime},
+    executor::MockExecutionOutcome,
+    orchestrator::{
+        CollectorCycleError, FoundationCycle, FoundationRuntime, PendingActionCancellationReason,
+        PendingActionError,
+    },
     providers::{IdProvider, TimeProvider},
     runtime::RuntimeTransition,
 };
 
 /// One deterministic operation in a prototype simulation scenario.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScenarioStep {
     /// Poll the supplied collector once.
     Collect,
+
+    /// Evaluate one structured action proposal.
+    EvaluateProposal(Box<ActionProposal>),
+
+    /// Approve one exact pending proposal.
+    Approve {
+        proposal: Box<ActionProposal>,
+        approved_by: String,
+    },
+
+    /// Explicitly reject one exact pending proposal.
+    Reject {
+        proposal: Box<ActionProposal>,
+        rejected_by: String,
+    },
+
+    /// Cancel one exact pending proposal for a system-owned reason.
+    Cancel {
+        proposal: Box<ActionProposal>,
+        reason: PendingActionCancellationReason,
+    },
 
     /// Request Game Mode.
     EnterGameMode,
@@ -32,6 +58,18 @@ pub enum ScenarioStep {
 pub enum ScenarioStepResult<E> {
     /// Result of one collector poll and foundation-runtime cycle.
     Collection(Result<Option<Box<FoundationCycle>>, CollectorCycleError<E>>),
+
+    /// Result of evaluating one structured proposal.
+    ActionEvaluation(MockExecutionOutcome),
+
+    /// Result of approving one exact pending proposal.
+    Approval(Result<MockExecutionOutcome, PendingActionError>),
+
+    /// Result of explicitly rejecting one exact pending proposal.
+    Rejection(Result<(), PendingActionError>),
+
+    /// Result of system-driven cancellation of one exact pending proposal.
+    Cancellation(Result<(), PendingActionError>),
 
     /// Result of one requested runtime-mode transition.
     RuntimeTransition(RuntimeTransition),
@@ -61,6 +99,24 @@ where
                     .collect_once(collector)
                     .map(|cycle| cycle.map(Box::new)),
             ),
+            ScenarioStep::EvaluateProposal(proposal) => {
+                ScenarioStepResult::ActionEvaluation(runtime.evaluate_proposal(&proposal))
+            }
+            ScenarioStep::Approve {
+                proposal,
+                approved_by,
+            } => {
+                ScenarioStepResult::Approval(runtime.approve_pending_action(&proposal, approved_by))
+            }
+            ScenarioStep::Reject {
+                proposal,
+                rejected_by,
+            } => {
+                ScenarioStepResult::Rejection(runtime.reject_pending_action(&proposal, rejected_by))
+            }
+            ScenarioStep::Cancel { proposal, reason } => {
+                ScenarioStepResult::Cancellation(runtime.cancel_pending_action(&proposal, reason))
+            }
             ScenarioStep::EnterGameMode => {
                 ScenarioStepResult::RuntimeTransition(runtime.enter_game_mode())
             }
@@ -76,7 +132,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        audit::AuditEventKind,
+        action::{ActionId, ActionImpact, ActionKind, ActionProposal, ActionRisk, Capability},
+        audit::{AuditEventKind, AuditValue},
         collector::{InjectedCollectorError, ScriptedCollector, ScriptedCollectorStep},
         event::{
             Event, EventId, EventKind, EventPayload, EventSource, EventTimestamp, Sensitivity,
@@ -93,6 +150,19 @@ mod tests {
             SequenceIdProvider::default(),
             FixedTimeProvider::new(1_800_000_000_123),
         )
+    }
+
+    fn state_changing_proposal(id: &str) -> ActionProposal {
+        ActionProposal::new(
+            ActionId::new(id),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::Moderate,
+            "Scenario state-changing proposal",
+            "scenario-analyzer",
+        )
+        .with_source_event(EventId::new(format!("event-for-{id}")))
     }
 
     fn event(id: &str, kind: &str) -> Event {
@@ -306,5 +376,152 @@ mod tests {
             .count();
 
         assert_eq!(transition_records, 3);
+    }
+
+    #[test]
+    fn scenario_can_evaluate_and_approve_pending_action() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let proposal = state_changing_proposal("scenario-approve");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::EvaluateProposal(Box::new(proposal.clone())),
+                ScenarioStep::Approve {
+                    proposal: Box::new(proposal.clone()),
+                    approved_by: "scenario-user".into(),
+                },
+            ],
+        );
+
+        assert!(matches!(
+            &results[0],
+            ScenarioStepResult::ActionEvaluation(MockExecutionOutcome::AwaitingUserApproval { .. })
+        ));
+
+        assert!(matches!(
+            &results[1],
+            ScenarioStepResult::Approval(Ok(MockExecutionOutcome::WouldExecute { .. }))
+        ));
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        assert!(
+            runtime
+                .audit_log()
+                .records()
+                .iter()
+                .any(|record| record.kind == AuditEventKind::ActionApproved)
+        );
+    }
+
+    #[test]
+    fn scenario_can_explicitly_reject_pending_action() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let proposal = state_changing_proposal("scenario-reject");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::EvaluateProposal(Box::new(proposal.clone())),
+                ScenarioStep::Reject {
+                    proposal: Box::new(proposal.clone()),
+                    rejected_by: "scenario-user".into(),
+                },
+            ],
+        );
+
+        assert!(matches!(&results[1], ScenarioStepResult::Rejection(Ok(()))));
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let rejection = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("scenario rejection should be audited");
+
+        assert_eq!(rejection.kind, AuditEventKind::ActionRejected);
+        assert_eq!(rejection.actor, "scenario-user");
+    }
+
+    #[test]
+    fn scenario_can_system_cancel_pending_action() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let proposal = state_changing_proposal("scenario-cancel");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::EvaluateProposal(Box::new(proposal.clone())),
+                ScenarioStep::Cancel {
+                    proposal: Box::new(proposal.clone()),
+                    reason: PendingActionCancellationReason::PolicyInvalidated,
+                },
+            ],
+        );
+
+        assert!(matches!(
+            &results[1],
+            ScenarioStepResult::Cancellation(Ok(()))
+        ));
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let cancellation = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("scenario cancellation should be audited");
+
+        assert_eq!(cancellation.kind, AuditEventKind::ActionCancelled);
+        assert_eq!(
+            cancellation.details.get("cancellation_reason"),
+            Some(&AuditValue::Text("policy_invalidated".into()))
+        );
+    }
+
+    #[test]
+    fn scenario_can_retry_approval_after_runtime_reenable() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let proposal = state_changing_proposal("scenario-approval-retry");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::EvaluateProposal(Box::new(proposal.clone())),
+                ScenarioStep::Disable,
+                ScenarioStep::Approve {
+                    proposal: Box::new(proposal.clone()),
+                    approved_by: "scenario-user".into(),
+                },
+                ScenarioStep::EnableNormal,
+                ScenarioStep::Approve {
+                    proposal: Box::new(proposal.clone()),
+                    approved_by: "scenario-user".into(),
+                },
+            ],
+        );
+
+        assert!(matches!(
+            &results[2],
+            ScenarioStepResult::Approval(Ok(MockExecutionOutcome::Blocked { .. }))
+        ));
+
+        assert!(matches!(
+            &results[4],
+            ScenarioStepResult::Approval(Ok(MockExecutionOutcome::WouldExecute { .. }))
+        ));
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+        assert_eq!(runtime.mode(), RuntimeMode::Normal);
     }
 }
