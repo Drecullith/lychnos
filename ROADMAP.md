@@ -81,7 +81,7 @@ Likely work:
 - multi-event simulations
 - analyzer/provider interface design
 - explicit user-approval flow with exact pending approval and rejection semantics
-- configuration consumption by the application runtime
+- configuration consumption by the application runtime (startup mode now wired through typed config)
 - diagnostics integration
 - persistent local development state where justified
 - failure injection and recovery tests
