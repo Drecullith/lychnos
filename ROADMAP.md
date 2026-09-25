@@ -78,9 +78,9 @@ Turn the foundation into a richer local development environment without yet depe
 Likely work:
 
 - richer deterministic collectors and scenarios (scripted event/empty/error/recovery flow now implemented)
-- multi-event simulations (stateful multi-step scenario runner now implemented)
+- multi-event simulations (stateful multi-step scenario runner now covers collection, runtime transitions, and pending-action lifecycle)
 - analyzer/provider interface design
-- explicit pending-action lifecycle with exact approval, rejection, and system-driven cancellation semantics
+- explicit pending-action lifecycle with exact approval, rejection, and system-driven cancellation semantics, including deterministic scenario coverage
 - configuration consumption by the application runtime (startup mode and diagnostics enablement now wired through typed config)
 - diagnostics integration (runtime emission now wired independently from mandatory security audit)
 - persistent local development state where justified
