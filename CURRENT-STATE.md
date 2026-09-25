@@ -178,8 +178,21 @@ Implemented:
 - generic `AuditSink`
 - append-only in-memory implementation
 - permission/execution audit integration
+- security auditing is mandatory and cannot be disabled through ordinary configuration
 
 Persistent tamper-resistant audit storage is not implemented yet.
+
+### Diagnostic logging boundary
+
+Implemented:
+
+- separate `DiagnosticLevel`
+- separate `DiagnosticRecord`
+- generic `DiagnosticSink`
+- in-memory diagnostic log
+- diagnostics configuration independent from the security audit trail
+
+Diagnostics are for troubleshooting and development. They do not carry the security guarantees of the audit system and may be disabled independently.
 
 ### Lychnos-owned memory
 
@@ -205,12 +218,15 @@ Permanent storage is not selected yet.
 Implemented:
 
 - typed TOML configuration
+- schema version 2
 - schema version validation
 - unknown-field rejection
 - runtime startup mode
 - memory enable/disable
-- audit enable/disable
+- diagnostic logging enable/disable
+- mandatory security audit with no configuration disable switch
 - cloud-request privacy switch
+- explicit rejection of legacy schema version 1
 
 Default cloud requests are disabled.
 
@@ -304,7 +320,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-68
+73
 ```
 
 Current quality gate:
@@ -343,6 +359,7 @@ Accepted ADRs currently cover:
 0016 Configuration loading boundary
 0017 Collector boundary and foundation pipeline
 0018 Runtime-aware collector suppression
+0019 Mandatory security audit and separate diagnostics
 ```
 
 ## Intentionally Mocked
@@ -427,9 +444,8 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. resolve the security-audit versus diagnostic-logging configuration boundary
-2. expand canonical project documentation
-3. perform the final Phase 1 boundary and quality review before real Omarchy integration
+1. expand canonical project documentation
+2. perform the final Phase 1 boundary and quality review before real Omarchy integration
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
