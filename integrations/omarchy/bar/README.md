@@ -11,9 +11,10 @@ or, when `XDG_STATE_HOME` is unset:
 
 `~/.local/state/lychnos/shell-presence`
 
-The module is visible only while that state is `hidden`. Clicking the icon
-activates the running GTK application's `restore` action, which brings the
-orb back and changes the state to `visible`.
+The module is visible while that state is `hidden` or `ghosted`. Clicking the
+icon activates the running GTK application's `restore` action, which brings a
+minimized orb back or exits click-through Ghost Mode, then changes the state to
+`visible`.
 
 This is an Omarchy adapter/integration. It is not part of the platform-
 independent Lychnos core.

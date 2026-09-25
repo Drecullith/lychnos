@@ -119,7 +119,15 @@ fn build_ui(app: &Application) {
     let restore_action = gtk::gio::SimpleAction::new("restore", None);
     {
         let window = window.clone();
+        let body = body.clone();
+        let status = status.card.clone();
+        let preferences = Rc::clone(&preferences);
         restore_action.connect_activate(move |_, _| {
+            set_click_through(&window, false);
+            body.set_opacity(1.0);
+            status.set_opacity(1.0);
+            preferences.borrow_mut().ghosted = false;
+            save_shell_preferences(*preferences.borrow());
             window.set_visible(true);
             window.present();
             save_shell_presence("visible");
@@ -137,7 +145,12 @@ fn build_ui(app: &Application) {
         save_shell_presence("hidden");
     } else {
         window.present();
-        save_shell_presence("visible");
+        if initial_preferences.ghosted {
+            set_click_through(&window, true);
+            save_shell_presence("ghosted");
+        } else {
+            save_shell_presence("visible");
+        }
     }
 }
 
@@ -268,9 +281,9 @@ fn install_context_menu(
 
     let initial_preferences = *preferences.borrow();
     let ghost_button = gtk::Button::with_label(if initial_preferences.ghosted {
-        "Normal opacity"
+        "Exit Ghost Mode"
     } else {
-        "See-through"
+        "Ghost Mode"
     });
     ghost_button.add_css_class("lychnos-menu-item");
     let status_button = gtk::Button::with_label(if initial_preferences.status_visible {
@@ -304,6 +317,7 @@ fn install_context_menu(
     popover.set_child(Some(&menu));
 
     {
+        let window = window.clone();
         let body = body.clone();
         let status = status.clone();
         let popover = popover.clone();
@@ -316,10 +330,12 @@ fn install_context_menu(
             status.set_opacity(opacity);
             preferences.borrow_mut().ghosted = next;
             save_shell_preferences(*preferences.borrow());
+            set_click_through(&window, next);
+            save_shell_presence(if next { "ghosted" } else { "visible" });
             button.set_label(if next {
-                "Normal opacity"
+                "Exit Ghost Mode"
             } else {
-                "See-through"
+                "Ghost Mode"
             });
             popover.popdown();
         });
@@ -419,9 +435,9 @@ fn install_context_menu(
                 "Lock position"
             });
             ghost_button.set_label(if current.ghosted {
-                "Normal opacity"
+                "Exit Ghost Mode"
             } else {
-                "See-through"
+                "Ghost Mode"
             });
             let rect = gtk::gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
@@ -448,6 +464,19 @@ fn clamp_shell_position(window: &ApplicationWindow, top: i32, right: i32) -> (i3
     let max_top = (geometry.height() - window_height).max(0);
 
     (top.clamp(0, max_top), right.clamp(0, max_right))
+}
+
+fn set_click_through(window: &ApplicationWindow, enabled: bool) {
+    let Some(surface) = window.surface() else {
+        return;
+    };
+
+    if enabled {
+        let empty_region = gtk::cairo::Region::create();
+        surface.set_input_region(Some(&empty_region));
+    } else {
+        surface.set_input_region(None);
+    }
 }
 
 fn shell_preferences_path() -> Option<PathBuf> {

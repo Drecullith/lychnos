@@ -8,7 +8,7 @@ Item {
   property var bar
   property string moduleName
   property var settings
-  property bool minimized: false
+  property bool recoverable: false
 
   readonly property string stateHome: {
     var configured = Quickshell.env("XDG_STATE_HOME")
@@ -16,12 +16,13 @@ Item {
   }
   readonly property string presencePath: stateHome + "/lychnos/shell-presence"
 
-  visible: minimized
-  implicitWidth: minimized ? (bar ? bar.barSize : 26) : 0
+  visible: recoverable
+  implicitWidth: recoverable ? (bar ? bar.barSize : 26) : 0
   implicitHeight: bar ? bar.barSize : 26
 
   function applyPresence(value) {
-    minimized = String(value || "").trim() === "hidden"
+    var state = String(value || "").trim()
+    recoverable = state === "hidden" || state === "ghosted"
   }
 
   FileView {
@@ -31,7 +32,7 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: root.applyPresence(text())
-    onLoadFailed: root.minimized = false
+    onLoadFailed: root.recoverable = false
   }
 
   Image {
@@ -55,7 +56,7 @@ Item {
     }
 
     onEntered: {
-      if (root.bar) root.bar.showTooltip(root, "Restore Lychnos")
+      if (root.bar) root.bar.showTooltip(root, "Restore Lychnos / Exit Ghost Mode")
     }
 
     onExited: {

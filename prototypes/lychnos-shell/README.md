@@ -66,8 +66,10 @@ cargo run --manifest-path prototypes/lychnos-shell/Cargo.toml
 - drag the Lychnos body to move the overlay;
 - the top/right position is remembered in `~/.config/lychnos/shell-position.conf` (or `$XDG_CONFIG_HOME/lychnos/shell-position.conf`);
 - double-click the body to hide/show the status card;
-- status visibility, see-through opacity, and position lock persist in `~/.config/lychnos/shell-preferences.conf` (or `$XDG_CONFIG_HOME/lychnos/...`);
-- minimized/visible presence survives shell restarts through the existing state file;
+- status visibility, Ghost Mode, and position lock persist in `~/.config/lychnos/shell-preferences.conf` (or `$XDG_CONFIG_HOME/lychnos/...`);
+- Ghost Mode makes the overlay translucent and click-through using an empty GDK input region;
+- minimized/visible/Ghost presence survives shell restarts through the existing state file;
+- the Omarchy top-bar icon is the guaranteed recovery path from both minimized and Ghost Mode states;
 - right-click for see-through, status, position lock/reset, minimize, and close controls;
 - **Minimize to top bar** hides the orb and reveals the Lychnos Omarchy bar icon;
 - clicking the small bar icon restores the orb;
