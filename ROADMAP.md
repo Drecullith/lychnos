@@ -78,7 +78,7 @@ Turn the foundation into a richer local development environment without yet depe
 Likely work:
 
 - richer deterministic collectors and scenarios (scripted event/empty/error/recovery flow now implemented)
-- multi-event simulations
+- multi-event simulations (stateful multi-step scenario runner now implemented)
 - analyzer/provider interface design
 - explicit user-approval flow with exact pending approval and rejection semantics
 - configuration consumption by the application runtime (startup mode now wired through typed config)
