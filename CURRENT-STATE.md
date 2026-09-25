@@ -54,6 +54,7 @@ Security Audit Record
 - `lychnos-core` library crate
 - `lychnos-cli` binary crate
 - GitHub Actions CI quality gate
+- dual licensing under MIT OR Apache-2.0
 - CI pinned to Ubuntu 24.04
 - CI uses `actions/checkout@v7`
 
