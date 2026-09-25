@@ -604,7 +604,7 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       165
+Core workspace:       171
 Runtime adapter tests:   5
 GTK shell prototype:     5
 ```
@@ -671,6 +671,7 @@ Accepted ADRs currently cover:
 0042 Normalized voice input and PipeWire discovery
 0043 Local push-to-talk speech recognition
 0044 Provider-neutral local text-to-speech
+0045 Bounded character initiative
 ```
 
 ## Intentionally Mocked
@@ -699,6 +700,7 @@ Lychnos does **not** currently have:
 - hardware telemetry
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
+- live initiative provider/runtime scheduling (the bounded core policy now exists)
 - local LLM integration
 - GPU/iGPU acceleration
 - real privileged execution
@@ -758,8 +760,8 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. connect a real AI provider behind `ConversationProvider` while keeping Lychnos persona/memory provider-independent
-2. add a bounded initiative/character loop so Lychnos can reason about context and speak proactively without gaining execution authority
+1. connect a real AI provider behind `ConversationProvider` and `InitiativeProvider` while keeping Lychnos persona/memory provider-independent
+2. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
 3. add wake-word activation on the existing local voice pipeline
 4. add explicit voice/persona settings and user-tunable text/voice/both behavior
 5. add speech interruption/ducking and output-device selection

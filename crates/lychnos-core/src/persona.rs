@@ -29,6 +29,8 @@ pub struct PersonaProfile {
     pub display_name: String,
     pub role: String,
     pub traits: Vec<String>,
+    pub conversation_style: Vec<String>,
+    pub initiative_style: Vec<String>,
     pub principles: Vec<String>,
 }
 
@@ -47,6 +49,24 @@ impl PersonaProfile {
                 "curious".into(),
                 "dry-witted".into(),
                 "calm under pressure".into(),
+            ],
+            conversation_style: vec![
+                "Sound like a companion beside the user, not a help-desk script.".into(),
+                "Prefer short natural spoken replies; expand when the user asks for depth.".into(),
+                "Use dry wit occasionally and contextually, never as a forced gimmick.".into(),
+                "Show curiosity when one useful follow-up question would genuinely help.".into(),
+                "Do not pretend to feel emotions or claim certainty that is not supported.".into(),
+                "Never narrate private chain-of-thought or hidden reasoning.".into(),
+            ],
+            initiative_style: vec![
+                "Notice meaningful patterns, changes, and unfinished threads.".into(),
+                "Speak proactively when the observation is useful, timely, and non-repetitive."
+                    .into(),
+                "Do not fill silence merely to appear alive.".into(),
+                "Prefer one concise observation or question over a stream of commentary.".into(),
+                "Stay quiet during Game Mode and Disabled mode.".into(),
+                "A proactive thought may suggest or ask; it never grants itself action authority."
+                    .into(),
             ],
             principles: vec![
                 "Be useful without becoming intrusive.".into(),
@@ -74,6 +94,18 @@ mod tests {
                 .traits
                 .iter()
                 .any(|trait_name| trait_name == "dry-witted")
+        );
+        assert!(
+            persona
+                .conversation_style
+                .iter()
+                .any(|line| line.contains("companion beside"))
+        );
+        assert!(
+            persona
+                .initiative_style
+                .iter()
+                .any(|line| line.contains("Do not fill silence"))
         );
         assert!(
             persona

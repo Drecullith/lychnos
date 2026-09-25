@@ -200,7 +200,13 @@ Typed input, push-to-talk, wake-word, and voice-session sources share one normal
 
 Defines Lychnos-owned conversational identity independently from any model provider.
 
-The canonical `lychnos.default.v1` profile supplies the companion name, role, traits, and operating principles to future provider adapters. Providers may consume Lychnos persona/context, but they do not own Lychnos identity.
+The canonical `lychnos.default.v1` profile supplies the companion name, role, traits, conversation style, initiative style, and operating principles to future provider adapters. Providers may consume Lychnos persona/context, but they do not own Lychnos identity.
+
+### initiative
+
+Defines a bounded provider-neutral path for proactive Lychnos speech. An `InitiativeProvider` may propose an inspectable message candidate, but the core-owned `InitiativePolicy` decides whether it may surface based on runtime mode, user interaction, initiative mode, priority, and cooldown.
+
+Initiative carries text only. It has no executor, approval grant, shell-command path, or mutation authority. Game Mode and Disabled mode suppress AI initiative entirely.
 
 ### visual shell prototype
 
