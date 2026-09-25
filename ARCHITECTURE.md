@@ -27,6 +27,9 @@ Lychnos is:
 Platform / Input Adapters
           |
           v
+       Collector
+          |
+          v
    Normalized Event
           |
           v
@@ -51,7 +54,7 @@ Platform / Input Adapters
       Audit Trail
 ```
 
-Configuration and Lychnos-owned memory exist alongside this processing path.
+Configuration, diagnostics, and Lychnos-owned memory exist alongside this processing path. Security audit remains part of the security-critical processing boundary.
 
 ## Core Modules
 
@@ -62,6 +65,14 @@ The platform-independent foundation currently lives in `crates/lychnos-core`.
 Defines the normalized event envelope used inside Lychnos.
 
 Platform-specific collectors must translate native input into this format before entering the core.
+
+### collector
+
+Defines the machine-independent event-source boundary.
+
+Collectors produce already-normalized `Event` values before they enter the core processing path.
+
+The current `MockCollector` is deterministic and in-memory. `FoundationRuntime::collect_once(...)` suppresses collector polling whenever background work is not allowed, so Game Mode and Disabled prevent collectors from being polled.
 
 ### bus
 
@@ -135,9 +146,19 @@ The executor evaluates live runtime state itself instead of trusting a caller-pr
 
 Defines structured security audit records and the `AuditSink` interface.
 
+The security audit trail is mandatory and cannot be disabled through ordinary configuration.
+
 The current `InMemoryAuditLog` is append-only through its public API.
 
 Persistent, tamper-resistant audit storage is future work.
+
+### diagnostics
+
+Defines ordinary troubleshooting and development records separately from the security audit system.
+
+The current `InMemoryDiagnosticLog` is a foundation implementation behind the `DiagnosticSink` interface.
+
+Diagnostics may be disabled independently. They do not replace mandatory security audit records.
 
 ### memory
 
@@ -151,16 +172,29 @@ The authoritative memory model belongs to Lychnos rather than any AI provider.
 
 Defines typed, versioned TOML configuration.
 
+The current configuration schema is version 2.
+
 Current defaults are local-first:
 
 ```text
 runtime mode:       Normal
 memory:             enabled
-audit:              enabled
+diagnostics:        enabled
 cloud AI requests:  disabled
+security audit:     mandatory
 ```
 
-Unknown configuration fields are rejected.
+Security audit has no configuration disable switch.
+
+Unknown configuration fields and legacy schema version 1 are rejected.
+
+### orchestrator
+
+Defines the current machine-independent `FoundationRuntime`.
+
+It owns the foundation event bus, internal subscription, runtime safety controller, in-memory security audit log, and injected ID/time providers.
+
+It accepts already-normalized events directly and can also pull one event from a collector while respecting runtime background-work suppression.
 
 ## CLI Crate
 
@@ -188,7 +222,10 @@ The core must not depend on them.
 The current machine-independent test pipeline is:
 
 ```text
-Mock Event
+MockCollector / Mock Event
+   |
+   v
+Normalized Event
    |
    v
 InMemoryEventBus
@@ -263,7 +300,9 @@ AI providers receive context from Lychnos but do not own Lychnos identity or per
 
 Game Mode and Disabled mode are architectural safety states rather than UI-only switches.
 
-Current core behavior blocks actions and non-essential background work in both modes.
+Current core behavior blocks actions in both modes.
+
+Runtime-driven collector polling is also suppressed in both Game Mode and Disabled before a collector is called.
 
 Real performance coexistence behavior must be measured later on actual workloads.
 
