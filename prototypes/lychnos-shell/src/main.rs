@@ -9,12 +9,16 @@ use std::{
 };
 
 use gtk::{
-    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, GestureClick, GestureDrag,
-    Label, Orientation,
+    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, GestureClick,
+    GestureDrag, Label, Orientation,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lychnos_core::{
     diagnostics::DiagnosticLevel,
+    interaction::{
+        ConversationRequest, ConversationRequestEnvelope, ConversationResponseEnvelope,
+        InteractionId, InteractionSource,
+    },
     presentation::{
         CompanionControlEnvelope, CompanionPresentationEnvelope, CompanionPresentationState,
         PendingApprovalControlRequest, PendingApprovalDecision, PendingApprovalPresentation,
@@ -72,14 +76,17 @@ fn build_ui(app: &Application) {
     let dragging = Rc::new(Cell::new(false));
     let body = build_body(Rc::clone(&state), Rc::clone(&dragging));
     let status = build_status_card(Rc::clone(&state));
+    let chat = build_chat_panel();
 
     let layout = GtkBox::new(Orientation::Vertical, 8);
     layout.set_halign(gtk::Align::Center);
     layout.append(&body);
     layout.append(&status.card);
+    layout.append(&chat.panel);
 
     let initial_preferences = *preferences.borrow();
     status.card.set_visible(initial_preferences.status_visible);
+    chat.panel.set_visible(false);
     let initial_opacity = if initial_preferences.ghosted {
         0.28
     } else {
@@ -87,6 +94,7 @@ fn build_ui(app: &Application) {
     };
     body.set_opacity(initial_opacity);
     status.card.set_opacity(initial_opacity);
+    chat.panel.set_opacity(initial_opacity);
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -111,12 +119,14 @@ fn build_ui(app: &Application) {
     install_shell_interactions(
         &window,
         &body,
-        &status.card,
+        (&status.card, &chat.panel),
         top_margin,
         right_margin,
         Rc::clone(&dragging),
         Rc::clone(&preferences),
     );
+    install_chat_controls(&window, &status, &chat);
+    install_chat_response_updates(&chat);
     install_live_presentation_updates(Rc::clone(&state), &body, &status);
 
     let restore_action = gtk::gio::SimpleAction::new("restore", None);
@@ -124,11 +134,13 @@ fn build_ui(app: &Application) {
         let window = window.clone();
         let body = body.clone();
         let status = status.card.clone();
+        let chat_panel = chat.panel.clone();
         let preferences = Rc::clone(&preferences);
         restore_action.connect_activate(move |_, _| {
             set_click_through(&window, false);
             body.set_opacity(1.0);
             status.set_opacity(1.0);
+            chat_panel.set_opacity(1.0);
             preferences.borrow_mut().ghosted = false;
             save_shell_preferences(*preferences.borrow());
             window.set_visible(true);
@@ -160,12 +172,14 @@ fn build_ui(app: &Application) {
 fn install_shell_interactions(
     window: &ApplicationWindow,
     body: &DrawingArea,
-    status: &GtkBox,
+    panels: (&GtkBox, &GtkBox),
     top_margin: i32,
     right_margin: i32,
     dragging: Rc<Cell<bool>>,
     preferences: Rc<RefCell<ShellPreferences>>,
 ) {
+    let status = panels.0;
+    let chat_panel = panels.1;
     let current_top = Rc::new(Cell::new(top_margin));
     let current_right = Rc::new(Cell::new(right_margin));
     let drag_start_top = Rc::new(Cell::new(top_margin));
@@ -260,6 +274,7 @@ fn install_shell_interactions(
         window,
         body,
         status,
+        chat_panel,
         Rc::clone(&current_top),
         Rc::clone(&current_right),
         Rc::clone(&preferences),
@@ -270,6 +285,7 @@ fn install_context_menu(
     window: &ApplicationWindow,
     body: &DrawingArea,
     status: &GtkBox,
+    chat_panel: &GtkBox,
     current_top: Rc<Cell<i32>>,
     current_right: Rc<Cell<i32>>,
     preferences: Rc<RefCell<ShellPreferences>>,
@@ -323,6 +339,7 @@ fn install_context_menu(
         let window = window.clone();
         let body = body.clone();
         let status = status.clone();
+        let chat_panel = chat_panel.clone();
         let popover = popover.clone();
         let preferences = Rc::clone(&preferences);
 
@@ -331,6 +348,7 @@ fn install_context_menu(
             let opacity = if next { 0.28 } else { 1.0 };
             body.set_opacity(opacity);
             status.set_opacity(opacity);
+            chat_panel.set_opacity(opacity);
             preferences.borrow_mut().ghosted = next;
             save_shell_preferences(*preferences.borrow());
             set_click_through(&window, next);
@@ -880,10 +898,180 @@ fn expression_from_state(state: &CompanionPresentationState) -> CompanionExpress
 }
 
 #[derive(Clone)]
+struct ChatPanel {
+    panel: GtkBox,
+    transcript: Label,
+    entry: Entry,
+    send_button: Button,
+    close_button: Button,
+    pending_request: Rc<RefCell<Option<InteractionId>>>,
+    last_user_text: Rc<RefCell<String>>,
+}
+
+fn build_chat_panel() -> ChatPanel {
+    let panel = GtkBox::new(Orientation::Vertical, 6);
+    panel.add_css_class("chat-panel");
+    panel.set_width_request(300);
+
+    let header = GtkBox::new(Orientation::Horizontal, 6);
+    let title = Label::new(Some("CHAT · LOCAL MOCK"));
+    title.add_css_class("chat-title");
+    title.set_hexpand(true);
+    title.set_halign(gtk::Align::Start);
+
+    let close_button = Button::with_label("×");
+    close_button.add_css_class("chat-close");
+
+    header.append(&title);
+    header.append(&close_button);
+
+    let transcript = Label::new(Some("Lychnos\nI'm here."));
+    transcript.add_css_class("chat-transcript");
+    transcript.set_wrap(true);
+    transcript.set_max_width_chars(42);
+    transcript.set_xalign(0.0);
+    transcript.set_selectable(true);
+
+    let input_row = GtkBox::new(Orientation::Horizontal, 6);
+    let entry = Entry::new();
+    entry.set_placeholder_text(Some("Talk to Lychnos…"));
+    entry.set_hexpand(true);
+
+    let send_button = Button::with_label("Send");
+    send_button.add_css_class("chat-send");
+
+    input_row.append(&entry);
+    input_row.append(&send_button);
+
+    panel.append(&header);
+    panel.append(&transcript);
+    panel.append(&input_row);
+
+    ChatPanel {
+        panel,
+        transcript,
+        entry,
+        send_button,
+        close_button,
+        pending_request: Rc::new(RefCell::new(None)),
+        last_user_text: Rc::new(RefCell::new(String::new())),
+    }
+}
+
+fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: &ChatPanel) {
+    {
+        let window = window.clone();
+        let panel = chat.panel.clone();
+        let entry = chat.entry.clone();
+
+        status.talk_button.connect_clicked(move |_| {
+            panel.set_visible(true);
+            window.set_keyboard_mode(KeyboardMode::OnDemand);
+            entry.grab_focus();
+        });
+    }
+
+    {
+        let window = window.clone();
+        let panel = chat.panel.clone();
+
+        chat.close_button.connect_clicked(move |_| {
+            panel.set_visible(false);
+            window.set_keyboard_mode(KeyboardMode::None);
+        });
+    }
+
+    {
+        let chat = chat.clone();
+        chat.send_button
+            .clone()
+            .connect_clicked(move |_| submit_chat_message(&chat));
+    }
+
+    {
+        let chat = chat.clone();
+        chat.entry
+            .clone()
+            .connect_activate(move |_| submit_chat_message(&chat));
+    }
+}
+
+fn submit_chat_message(chat: &ChatPanel) {
+    if chat.pending_request.borrow().is_some() {
+        return;
+    }
+
+    let text = chat.entry.text().trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+
+    match emit_typed_interaction(&text) {
+        Ok(request_id) => {
+            *chat.pending_request.borrow_mut() = Some(request_id);
+            *chat.last_user_text.borrow_mut() = text.clone();
+            chat.transcript
+                .set_label(&format!("You\n{text}\n\nLychnos\nThinking…"));
+            chat.entry.set_text("");
+            chat.entry.set_sensitive(false);
+            chat.send_button.set_sensitive(false);
+        }
+        Err(error) => {
+            chat.transcript
+                .set_label(&format!("Lychnos\nCouldn't send that message · {error}"));
+        }
+    }
+}
+
+fn install_chat_response_updates(chat: &ChatPanel) {
+    let chat = chat.clone();
+
+    gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+        let Some(pending_id) = chat.pending_request.borrow().clone() else {
+            return gtk::glib::ControlFlow::Continue;
+        };
+
+        for path in interaction_response_files() {
+            let contents = match fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(_) => continue,
+            };
+
+            let envelope = match ConversationResponseEnvelope::from_json(&contents) {
+                Ok(envelope) => envelope,
+                Err(_) => {
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+            };
+
+            if envelope.response.request_id != pending_id {
+                continue;
+            }
+
+            let user_text = chat.last_user_text.borrow().clone();
+            chat.transcript.set_label(&format!(
+                "You\n{user_text}\n\n{}\n{}",
+                envelope.response.persona_name, envelope.response.text
+            ));
+            *chat.pending_request.borrow_mut() = None;
+            chat.entry.set_sensitive(true);
+            chat.send_button.set_sensitive(true);
+            chat.entry.grab_focus();
+            let _ = fs::remove_file(&path);
+            break;
+        }
+
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+#[derive(Clone)]
 struct StatusCard {
     card: GtkBox,
     mode_label: Label,
     detail_label: Label,
+    talk_button: Button,
     approval_box: GtkBox,
     approve_button: Button,
     reject_button: Button,
@@ -905,6 +1093,9 @@ fn build_status_card(state: Rc<RefCell<CompanionPresentationState>>) -> StatusCa
     detail_label.set_max_width_chars(38);
     detail_label.set_wrap(true);
 
+    let talk_button = Button::with_label("Talk");
+    talk_button.add_css_class("talk-button");
+
     let approval_box = GtkBox::new(Orientation::Horizontal, 6);
     approval_box.add_css_class("approval-controls");
 
@@ -920,6 +1111,7 @@ fn build_status_card(state: Rc<RefCell<CompanionPresentationState>>) -> StatusCa
     card.append(&title);
     card.append(&mode_label);
     card.append(&detail_label);
+    card.append(&talk_button);
     card.append(&approval_box);
 
     let submitted_binding = Rc::new(RefCell::new(None));
@@ -982,6 +1174,7 @@ fn build_status_card(state: Rc<RefCell<CompanionPresentationState>>) -> StatusCa
         card,
         mode_label,
         detail_label,
+        talk_button,
         approval_box,
         approve_button,
         reject_button,
@@ -1087,6 +1280,64 @@ fn control_inbox_path() -> PathBuf {
     std::env::temp_dir().join("lychnos/control-inbox-v1")
 }
 
+fn interaction_inbox_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/interaction-inbox-v1");
+    }
+
+    std::env::temp_dir().join("lychnos/interaction-inbox-v1")
+}
+
+fn interaction_outbox_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/interaction-outbox-v1");
+    }
+
+    std::env::temp_dir().join("lychnos/interaction-outbox-v1")
+}
+
+fn emit_typed_interaction(text: &str) -> Result<InteractionId, String> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("clock failed: {error}"))?
+        .as_nanos();
+    let request_id = InteractionId::new(format!("typed-{}-{nanos}", std::process::id()));
+    let request = ConversationRequest::new(request_id.clone(), InteractionSource::Typed, text);
+    let envelope = ConversationRequestEnvelope::new(request);
+    let json = envelope
+        .to_json()
+        .map_err(|error| format!("serialize failed: {error}"))?;
+
+    let inbox = interaction_inbox_path();
+    fs::create_dir_all(&inbox).map_err(|error| format!("create inbox failed: {error}"))?;
+
+    let stem = format!("interaction-{}-{nanos}", std::process::id());
+    let temporary = inbox.join(format!("{stem}.json.tmp"));
+    let target = inbox.join(format!("{stem}.json"));
+
+    fs::write(&temporary, format!("{json}\n")).map_err(|error| format!("write failed: {error}"))?;
+    fs::rename(&temporary, &target).map_err(|error| format!("publish failed: {error}"))?;
+
+    Ok(request_id)
+}
+
+fn interaction_response_files() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(interaction_outbox_path()) else {
+        return Vec::new();
+    };
+
+    let mut paths: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
 fn emit_pending_approval_control(
     approval: &PendingApprovalPresentation,
     decision: PendingApprovalDecision,
@@ -1187,6 +1438,47 @@ fn install_css() {
         .detail-label {
             color: rgba(225, 244, 248, 0.74);
             font-size: 10px;
+        }
+        .talk-button {
+            margin-top: 6px;
+            min-width: 72px;
+            padding: 5px 9px;
+            border-radius: 8px;
+            background: rgba(27, 146, 184, 0.20);
+            border: 1px solid rgba(80, 219, 255, 0.34);
+            font-size: 10px;
+            font-weight: 700;
+        }
+        .chat-panel {
+            background: rgba(8, 15, 20, 0.94);
+            border: 1px solid rgba(51, 210, 255, 0.30);
+            border-radius: 14px;
+            padding: 10px 12px;
+        }
+        .chat-title {
+            color: #80e9ff;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+        .chat-transcript {
+            color: rgba(235, 249, 252, 0.90);
+            font-size: 10px;
+            padding: 4px 2px;
+        }
+        .chat-close {
+            min-width: 28px;
+            min-height: 24px;
+            padding: 2px 6px;
+            border-radius: 8px;
+        }
+        .chat-send {
+            min-width: 58px;
+            padding: 5px 8px;
+            border-radius: 8px;
+            background: rgba(27, 146, 184, 0.24);
+            border: 1px solid rgba(80, 219, 255, 0.38);
+            font-weight: 700;
         }
         .approval-controls {
             margin-top: 6px;

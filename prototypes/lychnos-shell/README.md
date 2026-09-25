@@ -68,7 +68,7 @@ For a normal user-level Omarchy install, use:
 lychnos
 ```
 
-The installed shell no longer depends on the Git checkout for its body asset or top-bar restore widget. The installer also creates an application entry named **Lychnos**.
+The installed shell no longer depends on the Git checkout for its body asset or top-bar restore widget. The installer also installs the unprivileged `lychnos-runtime`, creates an application entry named **Lychnos**, and the `lychnos` launcher manages both runtime and shell.
 
 ## Prototype interaction
 
@@ -82,6 +82,10 @@ The installed shell no longer depends on the Git checkout for its body asset or 
 - right-click for see-through, status, position lock/reset, minimize, and close controls;
 - **Minimize to top bar** hides the orb and reveals the Lychnos Omarchy bar icon;
 - clicking the small bar icon restores the orb;
+- **Talk** opens a compact typed conversation panel and temporarily enables on-demand keyboard focus;
+- typed messages are sent to the separately owned `lychnos-runtime` through the versioned interaction inbox;
+- the current reply provider is a deterministic local mock, while Lychnos' persona remains provider-independent;
+- closing chat returns the overlay to no-keyboard-focus mode;
 - pending approvals show the reason, action kind, risk, impact, and **Approve / Reject** controls;
 - approval controls emit versioned session-local intent files only; the shell never receives an approval grant or executor handle;
 - the runtime owner validates an opaque binding against the exact live pending proposal before acting on the decision;

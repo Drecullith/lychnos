@@ -57,6 +57,7 @@ Security Audit Record
 - committed `Cargo.lock`
 - `lychnos-core` library crate
 - `lychnos-cli` binary crate
+- `lychnos-runtime` user-level runtime binary crate
 - GitHub Actions CI quality gate
 - dual licensing under MIT OR Apache-2.0
 - CI pinned to Ubuntu 24.04
@@ -382,7 +383,14 @@ Implemented:
 - pending-approval card with action reason, kind, risk, impact, Approve, and Reject controls
 - versioned presentation-to-runtime control envelope written into a session-local inbox
 - opaque SHA-256 proposal binding so stale same-ID UI decisions fail closed before runtime approval/rejection
-- runtime-side demo consumer that re-checks the exact live pending proposal before using existing audited approve/reject APIs
+- runtime-side consumer that re-checks the exact live pending proposal before using existing audited approve/reject APIs
+- compact typed-chat panel with temporary on-demand keyboard focus
+- versioned typed interaction request/response transport under the session runtime directory
+- installed `lychnos-runtime` process that owns `FoundationRuntime`, persona, approvals, presentation publication, and conversation-provider calls
+- installed launcher starts/stops/restarts both runtime and shell and reports both statuses
+- deterministic local mock conversation provider for safe end-to-end interaction testing
+- canonical provider-neutral `lychnos.default.v1` persona profile
+- normalized interaction sources for Typed, Push-to-Talk, Wake Word, and Voice Session
 - lightweight idle float/pulse animation
 - no executor, approval grant, runtime controller, or host-action authority in the shell
 
@@ -592,7 +600,7 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       154
+Core workspace:       159
 GTK shell prototype:    5
 ```
 
@@ -652,6 +660,9 @@ Accepted ADRs currently cover:
 0036 Read-only companion presentation state
 0037 Isolated Wayland visual shell prototype
 0038 Versioned read-only presentation snapshot transport
+0039 Presentation control intents
+0040 Provider-neutral interaction and persona
+0041 User runtime and shell process split
 ```
 
 ## Intentionally Mocked
@@ -664,6 +675,7 @@ The following currently exist only as machine-independent test implementations:
 - audit persistence
 - memory persistence
 - platform-specific collectors
+- conversation provider (current provider is deterministic local mock only)
 
 This is intentional.
 
@@ -741,9 +753,12 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
-2. begin the interaction boundary for typed conversation/persona without coupling identity to a single AI provider
-3. keep real collectors, AI-provider integration, and host execution behind their adapter/security boundaries
+1. detect and normalize microphone input devices on Omarchy without enabling always-listening capture
+2. add a push-to-talk capture path that feeds the existing `InteractionSource::PushToTalk` conversation boundary
+3. add local speech-to-text behind a replaceable STT adapter
+4. connect a real AI provider behind `ConversationProvider` while keeping Lychnos persona/memory provider-independent
+5. add text-to-speech output and then wake-word activation on the same voice pipeline
+6. keep real collectors and host execution behind their adapter/security boundaries
 
 ## Hardware Context
 

@@ -2,6 +2,7 @@
 members = [
     "crates/lychnos-core",
     "crates/lychnos-cli",
+    "crates/lychnos-runtime",
 ]
 resolver = "3"
 

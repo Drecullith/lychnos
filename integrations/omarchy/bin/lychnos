@@ -4,12 +4,18 @@ set -euo pipefail
 APP_ID="org.lychnos.prototype.shell"
 LIB_DIR="${LYCHNOS_LIB_DIR:-$HOME/.local/lib/lychnos}"
 SHELL_BIN="$LIB_DIR/lychnos-shell"
+RUNTIME_BIN="$LIB_DIR/lychnos-runtime"
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 LOG_DIR="$STATE_HOME/lychnos"
-LOG_FILE="$LOG_DIR/shell.log"
+SHELL_LOG="$LOG_DIR/shell.log"
+RUNTIME_LOG="$LOG_DIR/runtime.log"
 
-is_running() {
+is_shell_running() {
   pgrep -u "$UID" -f "^$SHELL_BIN$" >/dev/null 2>&1
+}
+
+is_runtime_running() {
+  pgrep -u "$UID" -f "^$RUNTIME_BIN$" >/dev/null 2>&1
 }
 
 import_graphical_env() {
@@ -30,76 +36,136 @@ import_graphical_env() {
   done < <(tr '\0' '\n' <"/proc/$pid/environ")
 }
 
-start_shell() {
-  import_graphical_env
+require_install() {
+  for binary in "$RUNTIME_BIN" "$SHELL_BIN"; do
+    if [[ ! -x "$binary" ]]; then
+      echo "Lychnos is not fully installed; missing $binary" >&2
+      exit 1
+    fi
+  done
+}
 
-  if is_running; then
-    gapplication action "$APP_ID" restore >/dev/null 2>&1 || true
-    echo "Lychnos is already running; restored the shell."
+start_runtime() {
+  if is_runtime_running; then
     return
   fi
 
-  if [[ ! -x "$SHELL_BIN" ]]; then
-    echo "Lychnos is not installed at $SHELL_BIN" >&2
-    exit 1
-  fi
-
   mkdir -p "$LOG_DIR"
-  nohup "$SHELL_BIN" >>"$LOG_FILE" 2>&1 &
+  nohup "$RUNTIME_BIN" >>"$RUNTIME_LOG" 2>&1 &
   local pid=$!
+
   for _ in {1..30}; do
-    if is_running; then
-      echo "Lychnos started (PID $pid)."
+    if is_runtime_running; then
+      echo "Lychnos runtime started (PID $pid)."
       return
     fi
     sleep 0.1
   done
 
-  echo "Lychnos did not stay running. Check: $LOG_FILE" >&2
+  echo "Lychnos runtime did not stay running. Check: $RUNTIME_LOG" >&2
   exit 1
 }
 
-stop_shell() {
-  if ! is_running; then
-    echo "Lychnos is not running."
+start_shell() {
+  if is_shell_running; then
+    gapplication action "$APP_ID" restore >/dev/null 2>&1 || true
+    echo "Lychnos shell is already running; restored him."
     return
   fi
-  pkill -TERM -u "$UID" -f "^$SHELL_BIN$"
-  echo "Lychnos stopped."
+
+  mkdir -p "$LOG_DIR"
+  nohup "$SHELL_BIN" >>"$SHELL_LOG" 2>&1 &
+  local pid=$!
+
+  for _ in {1..30}; do
+    if is_shell_running; then
+      echo "Lychnos shell started (PID $pid)."
+      return
+    fi
+    sleep 0.1
+  done
+
+  echo "Lychnos shell did not stay running. Check: $SHELL_LOG" >&2
+  exit 1
 }
 
-status_shell() {
-  if is_running; then
-    echo "Lychnos is running."
-  else
-    echo "Lychnos is stopped."
-    return 1
+start_all() {
+  import_graphical_env
+  require_install
+  start_runtime
+  start_shell
+}
+
+stop_all() {
+  local stopped=false
+
+  if is_shell_running; then
+    pkill -TERM -u "$UID" -f "^$SHELL_BIN$"
+    echo "Lychnos shell stopped."
+    stopped=true
   fi
+
+  if is_runtime_running; then
+    pkill -TERM -u "$UID" -f "^$RUNTIME_BIN$"
+    echo "Lychnos runtime stopped."
+    stopped=true
+  fi
+
+  if [[ "$stopped" == false ]]; then
+    echo "Lychnos is not running."
+  fi
+}
+
+status_all() {
+  local failed=false
+
+  if is_runtime_running; then
+    echo "Runtime: running"
+  else
+    echo "Runtime: stopped"
+    failed=true
+  fi
+
+  if is_shell_running; then
+    echo "Shell:   running"
+  else
+    echo "Shell:   stopped"
+    failed=true
+  fi
+
+  [[ "$failed" == false ]]
+}
+
+show_logs() {
+  mkdir -p "$LOG_DIR"
+  touch "$RUNTIME_LOG" "$SHELL_LOG"
+
+  echo "=== Lychnos runtime ==="
+  tail -n 50 "$RUNTIME_LOG"
+  echo
+  echo "=== Lychnos shell ==="
+  tail -n 50 "$SHELL_LOG"
 }
 
 case "${1:-start}" in
-  start|launch|show) start_shell ;;
-  stop|close) stop_shell ;;
+  start|launch|show) start_all ;;
+  stop|close) stop_all ;;
   restart)
-    stop_shell || true
-    start_shell
+    stop_all || true
+    start_all
     ;;
-  status) status_shell ;;
-  logs)
-    mkdir -p "$LOG_DIR"
-    touch "$LOG_FILE"
-    tail -n 80 "$LOG_FILE"
-    ;;
+  status) status_all ;;
+  logs) show_logs ;;
   help|-h|--help)
     cat <<'EOF'
 Usage: lychnos [command]
 
 Commands:
-  start     Launch Lychnos or restore him if already running
-  stop      Close Lychnos
-  restart   Restart Lychnos
-  status    Show whether Lychnos is running
-  logs      Show recent shell logs
+  start     Launch the Lychnos runtime and shell, or restore the existing shell
+  stop      Close the shell and stop the user-level runtime
+  restart   Restart both runtime and shell
+  status    Show runtime and shell status
+  logs      Show recent runtime and shell logs
   help      Show this help
 
 Running 'lychnos' with no command is the same as 'lychnos start'.

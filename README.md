@@ -32,7 +32,7 @@ On an Omarchy machine, install the current desktop shell with:
 ./scripts/install-omarchy.sh
 ```
 
-The installer builds the shell, installs its assets and Omarchy bar integration into user-owned locations, adds a desktop launcher, and installs the `lychnos` command.
+The installer builds the user-level Lychnos runtime and shell, installs their assets and Omarchy bar integration into user-owned locations, adds a desktop launcher, and installs the `lychnos` command.
 
 After installation:
 
@@ -44,7 +44,7 @@ lychnos restart
 lychnos logs
 ```
 
-Running `lychnos` with no arguments launches Lychnos or restores the existing shell.
+Running `lychnos` with no arguments starts the Lychnos runtime and shell, or restores the existing shell when both are already running.
 
 ## License
 

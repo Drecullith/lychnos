@@ -23,10 +23,12 @@ for command in cargo python3 install; do
   fi
 done
 
-echo "Building Lychnos shell..."
+echo "Building Lychnos runtime and shell..."
+cargo build --release --manifest-path "$ROOT_DIR/Cargo.toml" -p lychnos-runtime
 cargo build --release --manifest-path "$ROOT_DIR/prototypes/lychnos-shell/Cargo.toml"
 
 mkdir -p "$BIN_DIR" "$LIB_DIR" "$DATA_DIR/assets" "$BAR_DIR" "$APP_DIR"
+install -m 755 "$ROOT_DIR/target/release/lychnos-runtime" "$LIB_DIR/lychnos-runtime"
 install -m 755 "$ROOT_DIR/prototypes/lychnos-shell/target/release/lychnos-shell-prototype" "$LIB_DIR/lychnos-shell"
 install -m 755 "$ROOT_DIR/integrations/omarchy/bin/lychnos" "$BIN_DIR/lychnos"
 install -m 644 "$ROOT_DIR/assets/canon/lychnos-body-v1.png" "$DATA_DIR/assets/lychnos-body-v1.png"

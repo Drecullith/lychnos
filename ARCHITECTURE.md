@@ -190,15 +190,27 @@ The current proposal binding is a SHA-256 digest over the in-process proposal re
 
 This allows an early visual shell to follow live core state and collect explicit user decisions without becoming an execution authority.
 
+### interaction
+
+Defines provider-neutral conversation requests, responses, input provenance, and the replaceable `ConversationProvider` boundary.
+
+Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. The current `MockConversationProvider` is deterministic and local; it exists only to prove the conversation path before a real AI-provider adapter is selected.
+
+### persona
+
+Defines Lychnos-owned conversational identity independently from any model provider.
+
+The canonical `lychnos.default.v1` profile supplies the companion name, role, traits, and operating principles to future provider adapters. Providers may consume Lychnos persona/context, but they do not own Lychnos identity.
+
 ### visual shell prototype
 
 `prototypes/lychnos-shell` is an isolated Omarchy/Wayland experiment built with GTK4 and gtk4-layer-shell.
 
 It is deliberately outside the main Cargo workspace so Linux desktop native dependencies do not become requirements for the platform-independent core or its standard CI.
 
-The shell uses presentation-domain data only, requests no keyboard interactivity, reserves no screen space, and renders the validated canonical Lychnos body asset with state-driven cyan expressions plus a compact status card.
+The shell is normally non-keyboard-interactive, reserves no screen space, and renders the validated canonical Lychnos body asset with state-driven cyan expressions plus a compact status card. Opening the chat panel temporarily uses layer-shell `OnDemand` keyboard mode so the user can type, then returns to `None` when chat closes.
 
-It now follows the versioned read-only presentation snapshot produced by a separately owned `FoundationRuntime`. The current JSON/session-file transport is intentionally replaceable and is not a final IPC decision.
+It follows the versioned read-only presentation snapshot produced by the separately owned runtime and sends authority-free approval and interaction requests through versioned session-local transports. The current JSON/session-file transport is intentionally replaceable and is not a final IPC decision.
 
 This prototype is not a final UI-toolkit decision.
 
@@ -240,24 +252,27 @@ It accepts already-normalized events directly and can also pull one event from a
 
 For Phase 2 simulation it also retains mock running-work records by action ID, exposes read-only lifecycle snapshots, mediates audited lifecycle transitions, and produces an owned companion presentation projection without granting host execution authority.
 
-## CLI Crate
+## Runtime and CLI Crates
 
-`crates/lychnos-cli` is currently a minimal executable proving that an application can depend on `lychnos-core`.
+`crates/lychnos-runtime` is the current unprivileged desktop runtime owner. It owns `FoundationRuntime`, the canonical persona, presentation publication, approval/rejection consumption, and conversation-provider calls.
 
-It will later become a development and diagnostic interface for simulation and runtime control.
+`crates/lychnos-cli` remains a development and diagnostic executable for simulation and explicit test scenarios.
+
+The Omarchy shell is a separate presentation process and does not own runtime authority.
 
 ## Dependency Direction
 
 The dependency direction is intentional:
 
 ```text
-lychnos-cli
-     |
-     v
-lychnos-core
+lychnos-runtime ----+
+                    |
+lychnos-cli --------+--> lychnos-core
+                    |
+lychnos-shell ------+
 ```
 
-Future platform integrations, UI components, voice systems, and adapters may depend on the core.
+Platform integrations, UI components, voice systems, and adapters may depend on the core.
 
 The core must not depend on them.
 
