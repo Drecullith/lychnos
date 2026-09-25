@@ -16,6 +16,10 @@ use crate::{
         MockExecutionOutcome, MockExecutor, MockRunningWork, MockRunningWorkState,
         MockRunningWorkTransitionError, MockWorkCooperationAssessment, MockWorkCooperationRequest,
     },
+    presentation::{
+        CompanionPresentationState, DiagnosticPresentation, PendingApprovalPresentation,
+        TrackedWorkPresentation,
+    },
     providers::{IdProvider, TimeProvider},
     runtime::{RuntimeController, RuntimeMode, RuntimeTransition, RuntimeWorkStartError},
 };
@@ -224,6 +228,39 @@ where
     #[must_use]
     pub const fn diagnostics_enabled(&self) -> bool {
         self.diagnostics_enabled
+    }
+
+    /// Projects the current foundation runtime into read-only presentation data.
+    ///
+    /// The returned snapshot contains no approval grants, executor handles,
+    /// runtime controller, or mutation capability.
+    #[must_use]
+    pub fn presentation_state(&self) -> CompanionPresentationState {
+        let pending_approvals = self
+            .pending_actions
+            .values()
+            .map(PendingApprovalPresentation::from)
+            .collect();
+
+        let tracked_work = self
+            .mock_work
+            .iter()
+            .map(|(action_id, work)| TrackedWorkPresentation::new(action_id.clone(), work.state()))
+            .collect();
+
+        let latest_diagnostic = self
+            .diagnostics
+            .records()
+            .last()
+            .map(DiagnosticPresentation::from);
+
+        CompanionPresentationState {
+            runtime_mode: self.runtime.mode(),
+            diagnostics_enabled: self.diagnostics_enabled,
+            pending_approvals,
+            tracked_work,
+            latest_diagnostic,
+        }
     }
 
     /// Returns the pending proposal with the supplied action ID.
@@ -1037,6 +1074,60 @@ mod tests {
             "test-analyzer",
         )
         .with_source_event(EventId::new(format!("event-for-{id}")))
+    }
+
+    #[test]
+    fn presentation_state_projects_runtime_without_mutating_authority_state() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("presentation-approval");
+        let work_id = ActionId::new("presentation-work");
+
+        let _ = runtime.evaluate_proposal(&proposal);
+        runtime
+            .start_mock_work(work_id.clone())
+            .expect("Normal mode should permit mock work");
+        runtime.enter_game_mode();
+
+        let pending_before = runtime.pending_actions_len();
+        let work_before = runtime.mock_work_items_len();
+        let audit_before = runtime.audit_log().len();
+
+        let presentation = runtime.presentation_state();
+
+        assert_eq!(presentation.runtime_mode, RuntimeMode::GameMode);
+        assert_eq!(presentation.pending_approval_count(), 1);
+        assert_eq!(presentation.pending_approvals[0].action_id, proposal.id);
+        assert_eq!(presentation.tracked_work.len(), 1);
+        assert_eq!(presentation.tracked_work[0].action_id, work_id);
+        assert_eq!(
+            presentation.tracked_work[0].state,
+            MockRunningWorkState::PauseRequested
+        );
+        assert_eq!(presentation.cooperation_pending_count(), 1);
+        assert!(presentation.latest_diagnostic.is_some());
+
+        assert_eq!(runtime.pending_actions_len(), pending_before);
+        assert_eq!(runtime.mock_work_items_len(), work_before);
+        assert_eq!(runtime.audit_log().len(), audit_before);
+    }
+
+    #[test]
+    fn presentation_state_respects_disabled_diagnostics() {
+        let mut config = LychnosConfig::default();
+        config.diagnostics.enabled = false;
+
+        let runtime = FoundationRuntime::from_config(
+            &config,
+            SequenceIdProvider::default(),
+            FixedTimeProvider::new(1_800_000_000_123),
+        );
+
+        let presentation = runtime.presentation_state();
+
+        assert!(!presentation.diagnostics_enabled);
+        assert!(presentation.latest_diagnostic.is_none());
+        assert!(presentation.pending_approvals.is_empty());
+        assert!(presentation.tracked_work.is_empty());
     }
 
     #[test]

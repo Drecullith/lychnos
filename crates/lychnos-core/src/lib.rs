@@ -13,6 +13,7 @@ pub mod executor;
 pub mod memory;
 pub mod orchestrator;
 pub mod permission;
+pub mod presentation;
 pub mod providers;
 pub mod resource;
 pub mod runtime;
