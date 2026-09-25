@@ -20,6 +20,7 @@ pub mod providers;
 pub mod resource;
 pub mod runtime;
 pub mod scenario;
+pub mod speech;
 pub mod voice;
 
 /// Canonical project name.

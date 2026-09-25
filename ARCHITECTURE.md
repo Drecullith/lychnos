@@ -216,9 +216,17 @@ This prototype is not a final UI-toolkit decision.
 
 ### voice
 
-Defines platform-neutral audio-input identities and voice-activation modes without depending on PipeWire, ALSA, or another host audio API.
+Defines platform-neutral audio-input identities, explicit capture-control messages, runtime-confirmed capture status, and voice-activation modes without depending on PipeWire, ALSA, or another host audio API.
 
-The Omarchy runtime currently discovers `Audio/Source` nodes through structured `pw-dump` data and marks the active default source using `wpctl`. Discovery is diagnostic only and does not capture audio. Push-to-talk will be the first explicit capture trigger; wake-word and voice-session modes will reuse the same normalized input model.
+The Omarchy runtime discovers `Audio/Source` nodes through structured `pw-dump` data and marks the active default source using `wpctl`. Push-to-talk uses explicit start/stop requests, a bounded 60-second capture window, runtime acknowledgements, and temporary 16 kHz mono WAV files under the session runtime directory. Machine-local source-port and input-level preferences are applied immediately before capture.
+
+### speech
+
+Defines the replaceable `SpeechToTextProvider` boundary and normalized `SpeechTranscript` type.
+
+The current Omarchy adapter runs multilingual whisper.cpp locally. Finalized PTT audio is transcribed locally, converted into a normal `InteractionSource::PushToTalk` conversation request, then deleted. Whisper non-speech tokens are suppressed, and pure annotation outputs such as `(upbeat music)` or `[Music]` are treated as no recognized speech rather than literal user text.
+
+Wake-word and voice-session capture will reuse the same normalized input, STT, persona, and conversation path.
 
 ### memory
 

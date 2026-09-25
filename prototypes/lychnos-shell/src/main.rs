@@ -5,7 +5,7 @@ use std::{
     fs,
     path::PathBuf,
     rc::Rc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use gtk::{
@@ -24,6 +24,10 @@ use lychnos_core::{
         PendingApprovalControlRequest, PendingApprovalDecision, PendingApprovalPresentation,
     },
     runtime::RuntimeMode,
+    voice::{
+        VoiceCaptureCommand, VoiceCaptureControlEnvelope, VoiceCaptureId, VoiceCaptureRequest,
+        VoiceCaptureState, VoiceCaptureStatusEnvelope,
+    },
 };
 
 const APP_ID: &str = "org.lychnos.prototype.shell";
@@ -127,6 +131,7 @@ fn build_ui(app: &Application) {
     );
     install_chat_controls(&window, &status, &chat);
     install_chat_response_updates(&chat);
+    install_voice_status_updates(&chat);
     install_live_presentation_updates(Rc::clone(&state), &body, &status);
 
     let restore_action = gtk::gio::SimpleAction::new("restore", None);
@@ -150,10 +155,14 @@ fn build_ui(app: &Application) {
     }
     app.add_action(&restore_action);
 
-    window.connect_close_request(|_| {
-        save_shell_presence("closed");
-        gtk::glib::Propagation::Proceed
-    });
+    {
+        let active_capture = Rc::clone(&chat.active_capture);
+        window.connect_close_request(move |_| {
+            stop_active_ptt(&active_capture);
+            save_shell_presence("closed");
+            gtk::glib::Propagation::Proceed
+        });
+    }
 
     if load_shell_presence().as_deref() == Some("hidden") {
         window.set_visible(false);
@@ -904,6 +913,11 @@ struct ChatPanel {
     entry: Entry,
     send_button: Button,
     close_button: Button,
+    ptt_surface: GtkBox,
+    ptt_label: Label,
+    active_capture: Rc<RefCell<Option<VoiceCaptureId>>>,
+    stop_requested: Rc<Cell<bool>>,
+    capture_started_at: Rc<RefCell<Option<Instant>>>,
     pending_request: Rc<RefCell<Option<InteractionId>>>,
     last_user_text: Rc<RefCell<String>>,
 }
@@ -932,6 +946,17 @@ fn build_chat_panel() -> ChatPanel {
     transcript.set_xalign(0.0);
     transcript.set_selectable(true);
 
+    let ptt_surface = GtkBox::new(Orientation::Horizontal, 0);
+    ptt_surface.add_css_class("chat-ptt");
+    ptt_surface.set_halign(gtk::Align::Fill);
+    ptt_surface.set_hexpand(true);
+    ptt_surface.set_focusable(true);
+
+    let ptt_label = Label::new(Some("Hold to Talk"));
+    ptt_label.set_hexpand(true);
+    ptt_label.set_halign(gtk::Align::Center);
+    ptt_surface.append(&ptt_label);
+
     let input_row = GtkBox::new(Orientation::Horizontal, 6);
     let entry = Entry::new();
     entry.set_placeholder_text(Some("Talk to Lychnos…"));
@@ -945,6 +970,7 @@ fn build_chat_panel() -> ChatPanel {
 
     panel.append(&header);
     panel.append(&transcript);
+    panel.append(&ptt_surface);
     panel.append(&input_row);
 
     ChatPanel {
@@ -953,6 +979,11 @@ fn build_chat_panel() -> ChatPanel {
         entry,
         send_button,
         close_button,
+        ptt_surface,
+        ptt_label,
+        active_capture: Rc::new(RefCell::new(None)),
+        stop_requested: Rc::new(Cell::new(false)),
+        capture_started_at: Rc::new(RefCell::new(None)),
         pending_request: Rc::new(RefCell::new(None)),
         last_user_text: Rc::new(RefCell::new(String::new())),
     }
@@ -974,12 +1005,78 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
     {
         let window = window.clone();
         let panel = chat.panel.clone();
+        let active_capture = Rc::clone(&chat.active_capture);
 
         chat.close_button.connect_clicked(move |_| {
+            stop_active_ptt(&active_capture);
             panel.set_visible(false);
             window.set_keyboard_mode(KeyboardMode::None);
         });
     }
+
+    let ptt_gesture = GestureClick::new();
+    ptt_gesture.set_button(1);
+
+    {
+        let ptt_label = chat.ptt_label.clone();
+        let transcript = chat.transcript.clone();
+        let active_capture = Rc::clone(&chat.active_capture);
+        let stop_requested = Rc::clone(&chat.stop_requested);
+        let capture_started_at = Rc::clone(&chat.capture_started_at);
+
+        ptt_gesture.connect_pressed(move |_, _, _, _| {
+            if active_capture.borrow().is_some() {
+                return;
+            }
+
+            let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos(),
+                Err(error) => {
+                    transcript.set_label(&format!("Lychnos\nMicrophone clock error · {error}"));
+                    return;
+                }
+            };
+            let capture_id = VoiceCaptureId::new(format!("ptt-{}-{nanos}", std::process::id()));
+
+            match emit_voice_capture_control(&capture_id, VoiceCaptureCommand::StartPushToTalk) {
+                Ok(()) => {
+                    *active_capture.borrow_mut() = Some(capture_id);
+                    stop_requested.set(false);
+                    *capture_started_at.borrow_mut() = None;
+                    ptt_label.set_label("Starting microphone…");
+                    transcript.set_label("Lychnos\nStarting microphone…");
+                }
+                Err(error) => {
+                    ptt_label.set_label("Hold to Talk");
+                    transcript.set_label(&format!("Lychnos\nCouldn't start microphone · {error}"));
+                }
+            }
+        });
+    }
+
+    {
+        let ptt_label = chat.ptt_label.clone();
+        let transcript = chat.transcript.clone();
+        let active_capture = Rc::clone(&chat.active_capture);
+        let stop_requested = Rc::clone(&chat.stop_requested);
+
+        ptt_gesture.connect_released(move |_, _, _, _| {
+            finish_ptt_from_ui(&ptt_label, &transcript, &active_capture, &stop_requested);
+        });
+    }
+
+    {
+        let ptt_label = chat.ptt_label.clone();
+        let transcript = chat.transcript.clone();
+        let active_capture = Rc::clone(&chat.active_capture);
+        let stop_requested = Rc::clone(&chat.stop_requested);
+
+        ptt_gesture.connect_unpaired_release(move |_, _, _, _, _| {
+            finish_ptt_from_ui(&ptt_label, &transcript, &active_capture, &stop_requested);
+        });
+    }
+
+    chat.ptt_surface.add_controller(ptt_gesture);
 
     {
         let chat = chat.clone();
@@ -993,6 +1090,36 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
         chat.entry
             .clone()
             .connect_activate(move |_| submit_chat_message(&chat));
+    }
+}
+
+fn finish_ptt_from_ui(
+    ptt_label: &Label,
+    transcript: &Label,
+    active_capture: &Rc<RefCell<Option<VoiceCaptureId>>>,
+    stop_requested: &Rc<Cell<bool>>,
+) {
+    let Some(capture_id) = active_capture.borrow().clone() else {
+        ptt_label.set_label("Hold to Talk");
+        return;
+    };
+
+    if stop_requested.get() {
+        return;
+    }
+
+    match emit_voice_capture_control(&capture_id, VoiceCaptureCommand::StopPushToTalk) {
+        Ok(()) => {
+            stop_requested.set(true);
+            ptt_label.set_label("Stopping microphone…");
+            transcript.set_label("Lychnos\nFinishing voice capture…");
+        }
+        Err(error) => {
+            ptt_label.set_label("Hold to Talk");
+            transcript.set_label(&format!("Lychnos\nCouldn't stop microphone · {error}"));
+            *active_capture.borrow_mut() = None;
+            stop_requested.set(false);
+        }
     }
 }
 
@@ -1060,6 +1187,103 @@ fn install_chat_response_updates(chat: &ChatPanel) {
             chat.entry.grab_focus();
             let _ = fs::remove_file(&path);
             break;
+        }
+
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+fn install_voice_status_updates(chat: &ChatPanel) {
+    let chat = chat.clone();
+
+    gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+        let active_id = chat.active_capture.borrow().clone();
+
+        if let Some(active_id) = active_id {
+            if let Ok(contents) = fs::read_to_string(voice_status_path())
+                && let Ok(envelope) = VoiceCaptureStatusEnvelope::from_json(&contents)
+                && envelope.status.capture_id == active_id
+            {
+                match envelope.status.state {
+                    VoiceCaptureState::Started => {
+                        if chat.capture_started_at.borrow().is_none() {
+                            *chat.capture_started_at.borrow_mut() = Some(Instant::now());
+                        }
+                        if chat.stop_requested.get() {
+                            chat.ptt_label.set_label("Stopping microphone…");
+                        } else {
+                            chat.ptt_label.set_label("● Listening… release to stop");
+                            chat.transcript
+                                .set_label("Lychnos\nMicrophone active · speak now.");
+                        }
+                    }
+                    VoiceCaptureState::Stopped => {
+                        let duration_ms = envelope.status.duration_ms.unwrap_or_default();
+                        let bytes = envelope.status.captured_bytes.unwrap_or_default();
+                        chat.ptt_label.set_label("Hold to Talk");
+                        chat.transcript.set_label(&format!(
+                            "Lychnos\nVoice captured · {:.1}s · {:.1} KiB",
+                            duration_ms as f64 / 1000.0,
+                            bytes as f64 / 1024.0
+                        ));
+                        *chat.active_capture.borrow_mut() = None;
+                        *chat.capture_started_at.borrow_mut() = None;
+                        chat.stop_requested.set(false);
+                    }
+                    VoiceCaptureState::Transcribing => {
+                        chat.ptt_label.set_label("Transcribing locally…");
+                        chat.transcript
+                            .set_label("Lychnos\nTranscribing your voice locally…");
+                    }
+                    VoiceCaptureState::Transcribed => {
+                        let transcript = envelope.status.transcript.clone().unwrap_or_default();
+                        let interaction_id = envelope.status.interaction_id.clone();
+
+                        chat.ptt_label.set_label("Hold to Talk");
+                        *chat.active_capture.borrow_mut() = None;
+                        *chat.capture_started_at.borrow_mut() = None;
+                        chat.stop_requested.set(false);
+
+                        if let Some(interaction_id) = interaction_id {
+                            *chat.pending_request.borrow_mut() = Some(interaction_id);
+                            *chat.last_user_text.borrow_mut() = transcript.clone();
+                            chat.transcript
+                                .set_label(&format!("You\n{transcript}\n\nLychnos\nThinking…"));
+                        } else {
+                            chat.transcript.set_label(&format!(
+                                "You\n{transcript}\n\nLychnos\nTranscript ready."
+                            ));
+                        }
+                    }
+                    VoiceCaptureState::Failed => {
+                        chat.ptt_label.set_label("Hold to Talk");
+                        chat.transcript.set_label(&format!(
+                            "Lychnos\nMicrophone failed · {}",
+                            envelope.status.detail
+                        ));
+                        *chat.active_capture.borrow_mut() = None;
+                        *chat.capture_started_at.borrow_mut() = None;
+                        chat.stop_requested.set(false);
+                    }
+                    VoiceCaptureState::TimedOut => {
+                        chat.ptt_label.set_label("Hold to Talk");
+                        chat.transcript
+                            .set_label("Lychnos\nVoice capture stopped at the 60s safety limit.");
+                        *chat.active_capture.borrow_mut() = None;
+                        *chat.capture_started_at.borrow_mut() = None;
+                        chat.stop_requested.set(false);
+                    }
+                }
+                let _ = fs::remove_file(voice_status_path());
+            }
+
+            if !chat.stop_requested.get()
+                && let Some(started_at) = *chat.capture_started_at.borrow()
+            {
+                let elapsed = started_at.elapsed().as_secs_f64();
+                chat.ptt_label
+                    .set_label(&format!("● Listening… {elapsed:.1}s · release to stop"));
+            }
         }
 
         gtk::glib::ControlFlow::Continue
@@ -1280,6 +1504,60 @@ fn control_inbox_path() -> PathBuf {
     std::env::temp_dir().join("lychnos/control-inbox-v1")
 }
 
+fn voice_control_inbox_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/voice-control-inbox-v1");
+    }
+
+    std::env::temp_dir().join("lychnos/voice-control-inbox-v1")
+}
+
+fn voice_status_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/voice-status-v1.json");
+    }
+
+    std::env::temp_dir().join("lychnos/voice-status-v1.json")
+}
+
+fn emit_voice_capture_control(
+    capture_id: &VoiceCaptureId,
+    command: VoiceCaptureCommand,
+) -> Result<(), String> {
+    let request = VoiceCaptureRequest {
+        capture_id: capture_id.clone(),
+        command,
+        device_id: None,
+    };
+    let envelope = VoiceCaptureControlEnvelope::new(request);
+    let json = envelope
+        .to_json()
+        .map_err(|error| format!("serialize failed: {error}"))?;
+
+    let inbox = voice_control_inbox_path();
+    fs::create_dir_all(&inbox).map_err(|error| format!("create inbox failed: {error}"))?;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("clock failed: {error}"))?
+        .as_nanos();
+    let stem = format!("voice-{}-{nanos}", std::process::id());
+    let temporary = inbox.join(format!("{stem}.json.tmp"));
+    let target = inbox.join(format!("{stem}.json"));
+
+    fs::write(&temporary, format!("{json}\n")).map_err(|error| format!("write failed: {error}"))?;
+    fs::rename(&temporary, &target).map_err(|error| format!("publish failed: {error}"))?;
+
+    Ok(())
+}
+
+fn stop_active_ptt(active_capture: &Rc<RefCell<Option<VoiceCaptureId>>>) {
+    let Some(capture_id) = active_capture.borrow_mut().take() else {
+        return;
+    };
+    let _ = emit_voice_capture_control(&capture_id, VoiceCaptureCommand::StopPushToTalk);
+}
+
 fn interaction_inbox_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir).join("lychnos/interaction-inbox-v1");
@@ -1478,6 +1756,14 @@ fn install_css() {
             border-radius: 8px;
             background: rgba(27, 146, 184, 0.24);
             border: 1px solid rgba(80, 219, 255, 0.38);
+            font-weight: 700;
+        }
+        .chat-ptt {
+            padding: 6px 10px;
+            border-radius: 9px;
+            background: rgba(45, 80, 112, 0.28);
+            border: 1px solid rgba(116, 193, 255, 0.34);
+            font-size: 10px;
             font-weight: 700;
         }
         .approval-controls {

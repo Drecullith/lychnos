@@ -9,6 +9,15 @@ STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 LOG_DIR="$STATE_HOME/lychnos"
 SHELL_LOG="$LOG_DIR/shell.log"
 RUNTIME_LOG="$LOG_DIR/runtime.log"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+VOICE_ENV="$CONFIG_HOME/lychnos/voice.env"
+
+if [[ -f "$VOICE_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$VOICE_ENV"
+  set +a
+fi
 
 is_shell_running() {
   pgrep -u "$UID" -f "^$SHELL_BIN$" >/dev/null 2>&1
@@ -16,6 +25,30 @@ is_shell_running() {
 
 is_runtime_running() {
   pgrep -u "$UID" -f "^$RUNTIME_BIN$" >/dev/null 2>&1
+}
+
+all_runtime_pids() {
+  pgrep -u "$UID" -f '(^|/)lychnos-runtime$' 2>/dev/null || true
+}
+
+foreign_runtime_pids() {
+  local pid cmd
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$cmd" == "$RUNTIME_BIN " || "$cmd" == "$RUNTIME_BIN" ]] && continue
+    printf '%s\n' "$pid"
+  done < <(all_runtime_pids)
+}
+
+ensure_single_runtime() {
+  local foreign
+  foreign="$(foreign_runtime_pids)"
+  if [[ -n "$foreign" ]]; then
+    echo "Another Lychnos runtime is already running: $foreign" >&2
+    echo "Stop the debug/other runtime before launching the installed Lychnos runtime." >&2
+    exit 1
+  fi
 }
 
 import_graphical_env() {
@@ -92,6 +125,7 @@ start_shell() {
 start_all() {
   import_graphical_env
   require_install
+  ensure_single_runtime
   start_runtime
   start_shell
 }
@@ -110,6 +144,10 @@ stop_all() {
     echo "Lychnos runtime stopped."
     stopped=true
   fi
+
+  # Safety cleanup for an explicitly active PTT recorder if the runtime is
+  # terminated before it can process a normal StopPushToTalk request.
+  pkill -INT -u "$UID" -f 'pw-record .*lychnos/audio/ptt-' 2>/dev/null || true
 
   if [[ "$stopped" == false ]]; then
     echo "Lychnos is not running."

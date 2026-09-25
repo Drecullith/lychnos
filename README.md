@@ -22,7 +22,7 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 - [Current state](CURRENT-STATE.md)
 - [Architecture decisions](docs/decisions/)
 
-The current codebase is still in the machine-independent foundation phase. Real Omarchy monitoring, AI-provider integration, voice, and system execution are intentionally deferred until the core safety boundaries are stable.
+The codebase is still foundation-first. Typed interaction, local push-to-talk capture, and local speech-to-text now exist, while real Omarchy monitoring, a real AI provider, text-to-speech, wake-word activation, and system execution remain behind explicit adapter/security boundaries.
 
 ## Omarchy development install
 
@@ -33,6 +33,14 @@ On an Omarchy machine, install the current desktop shell with:
 ```
 
 The installer builds the user-level Lychnos runtime and shell, installs their assets and Omarchy bar integration into user-owned locations, adds a desktop launcher, and installs the `lychnos` command.
+
+For local push-to-talk speech recognition, install the user-level whisper.cpp stack once with:
+
+```bash
+./scripts/install-local-stt.sh
+```
+
+This installs the multilingual Whisper base model and runtime under Lychnos-owned user directories; it does not require `sudo`.
 
 After installation:
 

@@ -1,4 +1,5 @@
 mod audio;
+mod stt;
 
 use std::{
     fs,
@@ -9,8 +10,8 @@ use std::{
 
 use lychnos_core::{
     interaction::{
-        ConversationProvider, ConversationRequestEnvelope, ConversationResponseEnvelope,
-        MockConversationProvider,
+        ConversationProvider, ConversationRequest, ConversationRequestEnvelope,
+        ConversationResponseEnvelope, InteractionId, InteractionSource, MockConversationProvider,
     },
     orchestrator::FoundationRuntime,
     persona::PersonaProfile,
@@ -18,6 +19,11 @@ use lychnos_core::{
         CompanionControlEnvelope, CompanionPresentationEnvelope, PendingApprovalDecision,
     },
     providers::{SequenceIdProvider, SystemTimeProvider},
+    speech::SpeechToTextProvider,
+    voice::{
+        VoiceCaptureCommand, VoiceCaptureControlEnvelope, VoiceCaptureState, VoiceCaptureStatus,
+        VoiceCaptureStatusEnvelope,
+    },
 };
 
 type Runtime = FoundationRuntime<SequenceIdProvider, SystemTimeProvider>;
@@ -36,9 +42,21 @@ fn main() {
     );
     let persona = PersonaProfile::lychnos_default();
     let provider = MockConversationProvider;
+    let stt = match stt::WhisperCppStt::discover() {
+        Ok(stt) => {
+            println!("Speech-to-text ready · {}", stt.description());
+            Some(stt)
+        }
+        Err(error) => {
+            eprintln!("Speech-to-text unavailable: {error}");
+            None
+        }
+    };
+    let mut active_capture: Option<audio::ActiveCapture> = None;
 
     report_audio_inputs();
     ensure_runtime_directories();
+    clear_stale_voice_session_state();
     publish_snapshot(&runtime);
 
     println!(
@@ -48,6 +66,8 @@ fn main() {
 
     loop {
         let runtime_changed = process_control_requests(&mut runtime);
+        process_voice_control_requests(&mut active_capture, stt.as_ref(), &provider, &persona);
+        enforce_voice_capture_timeout(&mut active_capture);
         process_interaction_requests(&provider, &persona);
 
         if runtime_changed {
@@ -168,6 +188,276 @@ fn process_control_requests(runtime: &mut Runtime) -> bool {
     runtime_changed
 }
 
+fn enforce_voice_capture_timeout(active_capture: &mut Option<audio::ActiveCapture>) {
+    const MAX_PTT_DURATION: Duration = Duration::from_secs(60);
+
+    if !active_capture
+        .as_ref()
+        .is_some_and(|capture| capture.elapsed() >= MAX_PTT_DURATION)
+    {
+        return;
+    }
+
+    let capture = active_capture
+        .take()
+        .expect("timed-out capture should still be active");
+    let capture_id = capture.capture_id.as_str().to_string();
+
+    match audio::stop_push_to_talk(capture) {
+        Ok(completed) => {
+            eprintln!(
+                "PTT capture {} auto-stopped after 60s · {} bytes · {}",
+                completed.capture_id.as_str(),
+                completed.bytes,
+                completed.path.display()
+            );
+            let _ = publish_voice_status(VoiceCaptureStatus {
+                capture_id: completed.capture_id,
+                state: VoiceCaptureState::TimedOut,
+                captured_bytes: Some(completed.bytes),
+                duration_ms: Some(completed.duration_ms),
+                transcript: None,
+                interaction_id: None,
+                detail: "Push-to-talk reached the 60 second safety limit.".into(),
+            });
+        }
+        Err(error) => {
+            eprintln!("PTT capture {capture_id} timeout cleanup failed: {error}");
+            let _ = publish_voice_status(VoiceCaptureStatus {
+                capture_id: lychnos_core::voice::VoiceCaptureId::new(capture_id),
+                state: VoiceCaptureState::Failed,
+                captured_bytes: None,
+                duration_ms: None,
+                transcript: None,
+                interaction_id: None,
+                detail: format!("Timeout cleanup failed: {error}"),
+            });
+        }
+    }
+}
+
+fn process_voice_control_requests(
+    active_capture: &mut Option<audio::ActiveCapture>,
+    stt: Option<&stt::WhisperCppStt>,
+    provider: &MockConversationProvider,
+    persona: &PersonaProfile,
+) {
+    for path in sorted_json_files(&voice_control_inbox_path()) {
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring unreadable voice control {}: {error}",
+                    path.display()
+                );
+                remove_request(&path);
+                continue;
+            }
+        };
+
+        let envelope = match VoiceCaptureControlEnvelope::from_json(&contents) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring invalid voice control {}: {error:?}",
+                    path.display()
+                );
+                remove_request(&path);
+                continue;
+            }
+        };
+
+        let request = envelope.request;
+        match request.command {
+            VoiceCaptureCommand::StartPushToTalk => {
+                if active_capture.is_some() {
+                    eprintln!(
+                        "Ignoring PTT start {} because capture is already active",
+                        request.capture_id.as_str()
+                    );
+                } else {
+                    match audio::start_push_to_talk(
+                        request.capture_id.clone(),
+                        request.device_id.as_ref(),
+                    ) {
+                        Ok(capture) => {
+                            println!(
+                                "PTT capture started · {} · {}",
+                                capture.capture_id.as_str(),
+                                capture.device.display_name
+                            );
+                            let _ = publish_voice_status(VoiceCaptureStatus {
+                                capture_id: capture.capture_id.clone(),
+                                state: VoiceCaptureState::Started,
+                                captured_bytes: None,
+                                duration_ms: None,
+                                transcript: None,
+                                interaction_id: None,
+                                detail: format!("Listening on {}", capture.device.display_name),
+                            });
+                            *active_capture = Some(capture);
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "PTT capture {} failed to start: {error}",
+                                request.capture_id.as_str()
+                            );
+                            let _ = publish_voice_status(VoiceCaptureStatus {
+                                capture_id: request.capture_id.clone(),
+                                state: VoiceCaptureState::Failed,
+                                captured_bytes: None,
+                                duration_ms: None,
+                                transcript: None,
+                                interaction_id: None,
+                                detail: format!("Could not start microphone: {error}"),
+                            });
+                        }
+                    }
+                }
+            }
+            VoiceCaptureCommand::StopPushToTalk => {
+                let Some(current) = active_capture.as_ref() else {
+                    eprintln!(
+                        "Ignoring PTT stop {} because no capture is active",
+                        request.capture_id.as_str()
+                    );
+                    remove_request(&path);
+                    continue;
+                };
+
+                if current.capture_id != request.capture_id {
+                    eprintln!(
+                        "Ignoring stale PTT stop {} while {} is active",
+                        request.capture_id.as_str(),
+                        current.capture_id.as_str()
+                    );
+                    remove_request(&path);
+                    continue;
+                }
+
+                let capture = active_capture
+                    .take()
+                    .expect("active capture should still be present");
+                match audio::stop_push_to_talk(capture) {
+                    Ok(completed) => {
+                        println!(
+                            "PTT capture stopped · {} · {} bytes · {} · {}",
+                            completed.capture_id.as_str(),
+                            completed.bytes,
+                            completed.device.display_name,
+                            completed.path.display()
+                        );
+
+                        let capture_id = completed.capture_id.clone();
+                        let captured_bytes = completed.bytes;
+                        let duration_ms = completed.duration_ms;
+
+                        let _ = publish_voice_status(VoiceCaptureStatus {
+                            capture_id: capture_id.clone(),
+                            state: VoiceCaptureState::Transcribing,
+                            captured_bytes: Some(captured_bytes),
+                            duration_ms: Some(duration_ms),
+                            transcript: None,
+                            interaction_id: None,
+                            detail: "Transcribing locally with Whisper.".into(),
+                        });
+
+                        match handle_completed_voice_turn(&completed, stt, provider, persona) {
+                            Ok((transcript, interaction_id)) => {
+                                println!(
+                                    "PTT transcription · {} · {}",
+                                    capture_id.as_str(),
+                                    transcript
+                                );
+                                let _ = publish_voice_status(VoiceCaptureStatus {
+                                    capture_id,
+                                    state: VoiceCaptureState::Transcribed,
+                                    captured_bytes: Some(captured_bytes),
+                                    duration_ms: Some(duration_ms),
+                                    transcript: Some(transcript),
+                                    interaction_id: Some(interaction_id),
+                                    detail: "Local transcription complete.".into(),
+                                });
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "PTT transcription {} failed: {error}",
+                                    capture_id.as_str()
+                                );
+                                let _ = publish_voice_status(VoiceCaptureStatus {
+                                    capture_id,
+                                    state: VoiceCaptureState::Failed,
+                                    captured_bytes: Some(captured_bytes),
+                                    duration_ms: Some(duration_ms),
+                                    transcript: None,
+                                    interaction_id: None,
+                                    detail: format!("Speech recognition failed: {error}"),
+                                });
+                            }
+                        }
+
+                        if let Err(error) = fs::remove_file(&completed.path) {
+                            eprintln!(
+                                "Failed to delete ephemeral voice capture {}: {error}",
+                                completed.path.display()
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "PTT capture {} failed to stop cleanly: {error}",
+                            request.capture_id.as_str()
+                        );
+                        let _ = publish_voice_status(VoiceCaptureStatus {
+                            capture_id: request.capture_id.clone(),
+                            state: VoiceCaptureState::Failed,
+                            captured_bytes: None,
+                            duration_ms: None,
+                            transcript: None,
+                            interaction_id: None,
+                            detail: format!("Could not finalize microphone capture: {error}"),
+                        });
+                    }
+                }
+            }
+        }
+
+        remove_request(&path);
+    }
+}
+
+fn handle_completed_voice_turn(
+    completed: &audio::CompletedCapture,
+    stt: Option<&stt::WhisperCppStt>,
+    provider: &MockConversationProvider,
+    persona: &PersonaProfile,
+) -> Result<(String, InteractionId), String> {
+    let stt = stt.ok_or_else(|| {
+        "local STT is not installed; run scripts/install-local-stt.sh".to_string()
+    })?;
+
+    let transcript = stt.transcribe(&completed.path)?;
+    let text = transcript.text.trim().to_string();
+    if text.is_empty() {
+        return Err("Whisper returned no speech".into());
+    }
+
+    let interaction_id = InteractionId::new(format!("ptt-{}", completed.capture_id.as_str()));
+    let request = ConversationRequest::new(
+        interaction_id.clone(),
+        InteractionSource::PushToTalk,
+        text.clone(),
+    );
+
+    let response = match provider.respond(persona, &request) {
+        Ok(response) => response,
+        Err(never) => match never {},
+    };
+    publish_interaction_response(&response)?;
+
+    Ok((text, interaction_id))
+}
+
 fn process_interaction_requests(provider: &MockConversationProvider, persona: &PersonaProfile) {
     for path in sorted_json_files(&interaction_inbox_path()) {
         let contents = match fs::read_to_string(&path) {
@@ -248,6 +538,30 @@ fn publish_interaction_response(
     atomic_write(&target, &format!("{json}\n"))
 }
 
+fn publish_voice_status(status: VoiceCaptureStatus) -> Result<(), String> {
+    let envelope = VoiceCaptureStatusEnvelope::new(status);
+    let json = envelope
+        .to_json()
+        .map_err(|error| format!("serialize voice status failed: {error}"))?;
+    atomic_write(&voice_status_path(), &format!("{json}\n"))
+}
+
+fn clear_stale_voice_session_state() {
+    let inbox = voice_control_inbox_path();
+    if let Ok(entries) = fs::read_dir(&inbox) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    let _ = fs::remove_file(voice_status_path());
+}
+
 fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     let parent = path
         .parent()
@@ -291,6 +605,7 @@ fn remove_request(path: &Path) {
 fn ensure_runtime_directories() {
     for path in [
         control_inbox_path(),
+        voice_control_inbox_path(),
         interaction_inbox_path(),
         interaction_outbox_path(),
     ] {
@@ -313,6 +628,14 @@ fn presentation_snapshot_path() -> PathBuf {
 
 fn control_inbox_path() -> PathBuf {
     runtime_root().join("control-inbox-v1")
+}
+
+fn voice_control_inbox_path() -> PathBuf {
+    runtime_root().join("voice-control-inbox-v1")
+}
+
+fn voice_status_path() -> PathBuf {
+    runtime_root().join("voice-status-v1.json")
 }
 
 fn interaction_inbox_path() -> PathBuf {
