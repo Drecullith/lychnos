@@ -80,7 +80,7 @@ Likely work:
 - richer deterministic collectors and scenarios
 - multi-event simulations
 - analyzer/provider interface design
-- explicit user-approval flow (first bound-grant slice implemented)
+- explicit user-approval flow with exact pending approval and rejection semantics
 - configuration consumption by the application runtime
 - diagnostics integration
 - persistent local development state where justified
