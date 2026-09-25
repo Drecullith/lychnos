@@ -9,6 +9,7 @@ use crate::{
     audit::{AuditDetails, AuditEventKind, AuditRecord, AuditSink, AuditValue, InMemoryAuditLog},
     bus::{EventSubscription, InMemoryEventBus, PublishReport},
     collector::Collector,
+    config::LychnosConfig,
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{MockExecutionOutcome, MockExecutor},
     providers::{IdProvider, TimeProvider},
@@ -98,6 +99,16 @@ where
             ids,
             clock,
         }
+    }
+
+    /// Creates a foundation runtime from validated typed configuration.
+    ///
+    /// Phase 2 currently consumes the configured startup mode here. Other
+    /// configuration sections will be wired into their owning subsystems
+    /// incrementally rather than being interpreted prematurely.
+    #[must_use]
+    pub fn from_config(config: &LychnosConfig, ids: I, clock: T) -> Self {
+        Self::new(config.runtime.startup_mode.into(), ids, clock)
     }
 
     /// Returns the current runtime safety mode.
@@ -429,6 +440,28 @@ mod tests {
             SequenceIdProvider::default(),
             FixedTimeProvider::new(1_800_000_000_123),
         )
+    }
+
+    #[test]
+    fn typed_config_controls_runtime_startup_mode() {
+        let cases = [
+            (crate::config::StartupMode::Normal, RuntimeMode::Normal),
+            (crate::config::StartupMode::GameMode, RuntimeMode::GameMode),
+            (crate::config::StartupMode::Disabled, RuntimeMode::Disabled),
+        ];
+
+        for (startup_mode, expected_mode) in cases {
+            let mut config = crate::config::LychnosConfig::default();
+            config.runtime.startup_mode = startup_mode;
+
+            let runtime = FoundationRuntime::from_config(
+                &config,
+                SequenceIdProvider::default(),
+                FixedTimeProvider::new(1_800_000_000_123),
+            );
+
+            assert_eq!(runtime.mode(), expected_mode);
+        }
     }
 
     fn state_changing_proposal(id: &str) -> ActionProposal {

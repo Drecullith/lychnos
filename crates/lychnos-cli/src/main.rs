@@ -1,9 +1,9 @@
 use lychnos_core::{
+    config::{LychnosConfig, StartupMode},
     event::{EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::MockExecutionOutcome,
     orchestrator::FoundationRuntime,
     providers::{SequenceIdProvider, SystemTimeProvider},
-    runtime::RuntimeMode,
 };
 
 fn main() {
@@ -13,12 +13,15 @@ fn main() {
         lychnos_core::version()
     );
 
-    let mode = requested_mode();
-
-    println!("Starting foundation simulation in {mode:?} mode...");
+    let config = requested_config();
 
     let mut runtime =
-        FoundationRuntime::new(mode, SequenceIdProvider::default(), SystemTimeProvider);
+        FoundationRuntime::from_config(&config, SequenceIdProvider::default(), SystemTimeProvider);
+
+    println!(
+        "Starting foundation simulation in {:?} mode...",
+        runtime.mode()
+    );
 
     let cycle = runtime
         .observe(
@@ -62,10 +65,14 @@ fn main() {
     println!("Audit records written: {}", cycle.audit_records);
 }
 
-fn requested_mode() -> RuntimeMode {
-    match std::env::args().nth(1).as_deref() {
-        Some("game") => RuntimeMode::GameMode,
-        Some("disabled") => RuntimeMode::Disabled,
-        _ => RuntimeMode::Normal,
-    }
+fn requested_config() -> LychnosConfig {
+    let mut config = LychnosConfig::default();
+
+    config.runtime.startup_mode = match std::env::args().nth(1).as_deref() {
+        Some("game") => StartupMode::GameMode,
+        Some("disabled") => StartupMode::Disabled,
+        _ => StartupMode::Normal,
+    };
+
+    config
 }
