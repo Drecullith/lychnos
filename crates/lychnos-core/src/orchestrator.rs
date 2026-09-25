@@ -1,9 +1,9 @@
 //! Machine-independent orchestration for the Lychnos foundation runtime.
 
-use std::sync::mpsc::TryRecvError;
+use std::{collections::BTreeMap, sync::mpsc::TryRecvError};
 
 use crate::{
-    action::ActionProposal,
+    action::{ActionId, ActionProposal},
     analyzer::MockAnalyzer,
     approval::ApprovalGrant,
     audit::{AuditDetails, AuditEventKind, AuditRecord, AuditSink, AuditValue, InMemoryAuditLog},
@@ -51,6 +51,17 @@ pub enum CollectorCycleError<E> {
     Runtime(FoundationRuntimeError),
 }
 
+/// Failure while acting on a proposal that should still be pending approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingActionError {
+    /// No pending proposal exists with this action identifier.
+    NotPending { action_id: ActionId },
+
+    /// The caller is trying to approve a different proposal than the one
+    /// currently held by the runtime under the same action identifier.
+    ProposalChanged { action_id: ActionId },
+}
+
 /// Machine-independent orchestration service used during the foundation phase.
 ///
 /// It deliberately uses the mock analyzer, mock executor, in-memory event bus,
@@ -62,6 +73,7 @@ pub struct FoundationRuntime<I, T> {
     subscription: EventSubscription,
     runtime: RuntimeController,
     audit: InMemoryAuditLog,
+    pending_actions: BTreeMap<ActionId, ActionProposal>,
     ids: I,
     clock: T,
 }
@@ -82,6 +94,7 @@ where
             subscription,
             runtime: RuntimeController::new(initial_mode),
             audit: InMemoryAuditLog::new(),
+            pending_actions: BTreeMap::new(),
             ids,
             clock,
         }
@@ -99,13 +112,91 @@ where
         &self.audit
     }
 
-    /// Records explicit user approval for one exact action proposal.
-    ///
-    /// The returned grant is bound to the complete proposal. Callers cannot
-    /// construct grants directly; this runtime boundary is the foundation
-    /// issuance path after a trusted interaction layer has confirmed consent.
+    /// Returns the pending proposal with the supplied action ID.
     #[must_use]
-    pub fn approve_action(
+    pub fn pending_action(&self, action_id: &ActionId) -> Option<&ActionProposal> {
+        self.pending_actions.get(action_id)
+    }
+
+    /// Returns the number of proposals currently awaiting explicit approval.
+    #[must_use]
+    pub fn pending_actions_len(&self) -> usize {
+        self.pending_actions.len()
+    }
+
+    /// Evaluates one structured proposal through the mock execution boundary.
+    ///
+    /// Proposals requiring explicit approval are retained by the runtime until
+    /// an exact matching proposal is approved successfully.
+    #[must_use]
+    pub fn evaluate_proposal(&mut self, proposal: &ActionProposal) -> MockExecutionOutcome {
+        let outcome = match MockExecutor.evaluate_and_audit(
+            proposal,
+            &self.runtime,
+            &mut self.audit,
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(never) => match never {},
+        };
+
+        if matches!(outcome, MockExecutionOutcome::AwaitingUserApproval { .. }) {
+            self.pending_actions
+                .insert(proposal.id.clone(), proposal.clone());
+        }
+
+        outcome
+    }
+
+    /// Approves the exact pending proposal supplied by the caller and
+    /// immediately re-evaluates it against live runtime safety.
+    ///
+    /// Supplying an older or modified proposal with the same action ID is
+    /// rejected before an approval grant is issued.
+    pub fn approve_pending_action(
+        &mut self,
+        proposal: &ActionProposal,
+        approved_by: impl Into<String>,
+    ) -> Result<MockExecutionOutcome, PendingActionError> {
+        let Some(pending) = self.pending_actions.get(&proposal.id) else {
+            return Err(PendingActionError::NotPending {
+                action_id: proposal.id.clone(),
+            });
+        };
+
+        if pending != proposal {
+            return Err(PendingActionError::ProposalChanged {
+                action_id: proposal.id.clone(),
+            });
+        }
+
+        let pending = pending.clone();
+        let approval = self.issue_approval(&pending, approved_by);
+
+        let outcome = match MockExecutor.evaluate_with_approval_and_audit(
+            &pending,
+            &self.runtime,
+            approval,
+            &mut self.audit,
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(never) => match never {},
+        };
+
+        if matches!(outcome, MockExecutionOutcome::WouldExecute { .. }) {
+            self.pending_actions.remove(&pending.id);
+        }
+
+        Ok(outcome)
+    }
+
+    /// Issues and audits one approval grant after the pending-action boundary
+    /// has verified that the user is approving the exact stored proposal.
+    #[must_use]
+    fn issue_approval(
         &mut self,
         proposal: &ActionProposal,
         approved_by: impl Into<String>,
@@ -246,16 +337,7 @@ where
 
         let proposal = MockAnalyzer.analyze(&received);
 
-        let outcome = match MockExecutor.evaluate_and_audit(
-            &proposal,
-            &self.runtime,
-            &mut self.audit,
-            self.ids.next_audit_id(),
-            self.clock.audit_timestamp(),
-        ) {
-            Ok(outcome) => outcome,
-            Err(never) => match never {},
-        };
+        let outcome = self.evaluate_proposal(&proposal);
 
         Ok(FoundationCycle {
             publish_report,
@@ -286,12 +368,9 @@ mod tests {
         )
     }
 
-    #[test]
-    fn runtime_issues_bound_approval_and_audits_it() {
-        let mut runtime = runtime(RuntimeMode::Normal);
-
-        let proposal = ActionProposal::new(
-            ActionId::new("action-approved"),
+    fn state_changing_proposal(id: &str) -> ActionProposal {
+        ActionProposal::new(
+            ActionId::new(id),
             ActionKind::new("file.write"),
             Capability::new("file.write"),
             ActionImpact::StateChanging,
@@ -299,38 +378,177 @@ mod tests {
             "Write a configuration file",
             "test-analyzer",
         )
-        .with_source_event(EventId::new("event-approved"));
+        .with_source_event(EventId::new(format!("event-for-{id}")))
+    }
 
-        let grant = runtime.approve_action(&proposal, "local-user");
+    #[test]
+    fn state_changing_proposal_is_held_pending() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-pending");
 
-        assert!(grant.matches(&proposal));
-        assert_eq!(grant.action_id().as_str(), "action-approved");
-        assert_eq!(grant.approved_by(), "local-user");
-
-        let record = &runtime.audit_log().records()[0];
-
-        assert_eq!(record.kind, AuditEventKind::ActionApproved);
-        assert_eq!(record.actor, "local-user");
+        let outcome = runtime.evaluate_proposal(&proposal);
 
         assert_eq!(
-            record.action_id.as_ref().map(ActionId::as_str),
-            Some("action-approved")
+            outcome,
+            MockExecutionOutcome::AwaitingUserApproval {
+                action_id: ActionId::new("action-pending"),
+            }
         );
 
-        assert_eq!(
-            record.event_id.as_ref().map(EventId::as_str),
-            Some("event-approved")
-        );
+        assert_eq!(runtime.pending_actions_len(), 1);
+        assert_eq!(runtime.pending_action(&proposal.id), Some(&proposal));
+    }
+
+    #[test]
+    fn exact_pending_approval_advances_and_clears_action() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-approved");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let outcome = runtime
+            .approve_pending_action(&proposal, "local-user")
+            .expect("exact pending proposal should be approvable");
 
         assert_eq!(
-            record.details.get("action_kind"),
-            Some(&AuditValue::Text("file.write".into()))
+            outcome,
+            MockExecutionOutcome::WouldExecute {
+                action_id: ActionId::new("action-approved"),
+            }
         );
 
+        assert_eq!(runtime.pending_actions_len(), 0);
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let records = runtime.audit_log().records();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].kind, AuditEventKind::PermissionEvaluated);
+        assert_eq!(records[1].kind, AuditEventKind::ActionApproved);
+        assert_eq!(records[1].actor, "local-user");
+        assert_eq!(records[2].kind, AuditEventKind::PermissionEvaluated);
+
         assert_eq!(
-            record.details.get("capability"),
-            Some(&AuditValue::Text("file.write".into()))
+            records[2].details.get("approval"),
+            Some(&AuditValue::Text("matched".into()))
         );
+        assert_eq!(
+            records[2].details.get("decision"),
+            Some(&AuditValue::Text("would_execute".into()))
+        );
+    }
+
+    #[test]
+    fn changed_pending_proposal_rejects_stale_approval() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let original = state_changing_proposal("action-changing");
+        assert!(matches!(
+            runtime.evaluate_proposal(&original),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let changed = ActionProposal::new(
+            ActionId::new("action-changing"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::High,
+            "Write different configuration contents",
+            "test-analyzer",
+        )
+        .with_source_event(EventId::new("event-for-action-changing"));
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&changed),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let error = runtime
+            .approve_pending_action(&original, "local-user")
+            .expect_err("stale proposal must not be approved");
+
+        assert_eq!(
+            error,
+            PendingActionError::ProposalChanged {
+                action_id: ActionId::new("action-changing"),
+            }
+        );
+
+        assert_eq!(runtime.pending_action(&original.id), Some(&changed));
+
+        assert!(
+            runtime
+                .audit_log()
+                .records()
+                .iter()
+                .all(|record| record.kind != AuditEventKind::ActionApproved)
+        );
+    }
+
+    #[test]
+    fn disable_before_pending_approval_blocks_and_keeps_action_pending() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-disabled");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+        runtime.disable();
+
+        let outcome = runtime
+            .approve_pending_action(&proposal, "local-user")
+            .expect("exact proposal can be approved even though runtime safety blocks it");
+
+        assert_eq!(
+            outcome,
+            MockExecutionOutcome::Blocked {
+                action_id: ActionId::new("action-disabled"),
+                reason: DenialReason::Disabled,
+            }
+        );
+
+        assert_eq!(runtime.pending_actions_len(), 1);
+        assert_eq!(runtime.pending_action(&proposal.id), Some(&proposal));
+
+        let last = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("blocked approval evaluation should be audited");
+
+        assert_eq!(last.kind, AuditEventKind::PermissionEvaluated);
+        assert_eq!(
+            last.details.get("approval"),
+            Some(&AuditValue::Text("runtime_blocked".into()))
+        );
+        assert_eq!(
+            last.details.get("decision"),
+            Some(&AuditValue::Text("blocked_disabled".into()))
+        );
+    }
+
+    #[test]
+    fn unknown_proposal_cannot_be_approved() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-unknown");
+
+        let error = runtime
+            .approve_pending_action(&proposal, "local-user")
+            .expect_err("proposal was never submitted to the runtime");
+
+        assert_eq!(
+            error,
+            PendingActionError::NotPending {
+                action_id: ActionId::new("action-unknown"),
+            }
+        );
+
+        assert!(runtime.audit_log().is_empty());
     }
 
     #[test]
