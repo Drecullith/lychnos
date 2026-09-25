@@ -86,7 +86,7 @@ Likely work:
 - persistent local development state where justified
 - failure injection and recovery tests (collector failure/recovery slice implemented)
 - pending-action supersession now cancels the older request explicitly and audits it as system-driven cancellation
-- cancellation semantics for work already in progress when Disabled is entered
+- cancellation semantics for work already in progress when Disabled is entered (machine-independent cancellation leases now implemented; acknowledgement/completion and real executor cooperation remain pending)
 - resource-budget instrumentation for later Game Mode testing
 
 This phase should make it possible to exercise Lychnos behavior end to end before granting it meaningful access to the host system.
