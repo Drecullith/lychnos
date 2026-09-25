@@ -249,8 +249,16 @@ Implemented:
 - generic `DiagnosticSink`
 - in-memory diagnostic log
 - diagnostics configuration independent from the security audit trail
+- runtime-owned diagnostic log
+- `diagnostics.enabled` consumed by `FoundationRuntime::from_config(...)`
+- startup diagnostics when enabled
+- action-evaluation diagnostics for mock-allowed, awaiting-approval, and runtime-blocked outcomes
+- read-only diagnostic-log access from the foundation runtime
+- explicit test proving diagnostics can be disabled while the mandatory security audit continues recording permission decisions
 
 Diagnostics are for troubleshooting and development. They do not carry the security guarantees of the audit system and may be disabled independently.
+
+Security auditing remains mandatory and independent of diagnostic configuration.
 
 ### Lychnos-owned memory
 
@@ -405,7 +413,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-90
+93
 ```
 
 Current quality gate:
@@ -449,6 +457,7 @@ Accepted ADRs currently cover:
 0021 Pending action approval runtime flow
 0022 Explicit pending action rejection
 0023 Typed configuration runtime consumption
+0024 Runtime diagnostics integration
 ```
 
 ## Intentionally Mocked
@@ -534,9 +543,8 @@ Immediate next work should remain machine-independent and simulation-first.
 Likely next steps:
 
 1. define system-driven cancellation semantics separately from explicit user rejection
-2. integrate ordinary diagnostics without weakening the mandatory security audit
-3. add richer deterministic scenarios and failure injection
-4. define cancellation semantics for already-running work before any real executor exists
+2. add richer deterministic scenarios and failure injection
+3. define cancellation semantics for already-running work before any real executor exists
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
