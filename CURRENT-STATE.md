@@ -16,7 +16,9 @@ feat/phase2-approval-flow
 
 ## Current Milestone
 
-The first Phase 2 approval boundary is working: explicit approval can now be bound to one exact structured action proposal without weakening live runtime safety.
+The floating Lychnos desktop shell now follows **live read-only state from a separately owned `FoundationRuntime`**.
+
+The runtime projects `CompanionPresentationState`, wraps it in a versioned `CompanionPresentationEnvelope`, and publishes an atomic session-local snapshot. The GTK shell consumes only that read-only projection and changes expression/status without gaining execution authority.
 
 ```text
 Normalized Event
@@ -347,10 +349,13 @@ Implemented:
 - projected tracked mock-work state with terminal/cooperation-pending flags
 - latest ordinary diagnostic projection when available
 - `FoundationRuntime::presentation_state()`
+- versioned `CompanionPresentationEnvelope` wire contract
+- schema-version validation with unknown versions rejected
+- JSON round-trip coverage for the authority-free projection
 - tests proving projection does not mutate pending actions, mock work, runtime state, or audit history
 - no approval grants, runtime controller, executor, mutable runtime reference, or direct action method exposed through the presentation model
 
-This boundary exists so an early floating-body UI can render safe simulated/projected state without gaining execution authority.
+The current Phase 2 transport publishes this read-only snapshot to session-local runtime storage. The transport is replaceable; the authority boundary is canonical.
 
 ### Omarchy floating visual-shell prototype
 
@@ -358,21 +363,38 @@ Implemented:
 
 - isolated `prototypes/lychnos-shell` Rust binary outside the main Cargo workspace
 - GTK4 + gtk4-layer-shell on the Omarchy/Hyprland development machine
-- non-exclusive Wayland overlay surface anchored near the top-right
-- no keyboard interactivity and no reserved screen space
-- procedural Lychnos body refined toward the locked segmented armor-petal shell, glossy black face disc, cyan expressions, and hover ring
-- compact status card
-- distinct safe demo presentation for Normal, Game Mode, Disabled, approval-waiting, and alert states
-- dependency on `lychnos-core` presentation-domain types only
-- separate prototype `cargo check` passes on the Omarchy machine
-- graphical launch smoke test remained alive until the deliberate four-second test timeout, with no startup error
-- drag-to-move shell interaction using live top/right layer-shell margins
-- remembered presentation position under the user's Lychnos config directory
-- double-click status-card collapse/expand
+- non-exclusive Wayland overlay surface with no reserved screen space
+- validated canonical black/blue Lychnos body asset
+- state-driven cyan expression overlay
+- compact live status card
+- live read-only snapshot consumption from a separately owned `FoundationRuntime`
+- Normal, active-work, approval, Game Mode, Disabled, and warning/error visual mappings
+- drag-to-move and remembered position
+- double-click status toggle
+- right-click see-through, status, position lock/reset, minimize, and close controls
+- Omarchy top-bar minimize/restore integration under `integrations/omarchy/bar/`
 - lightweight idle float/pulse animation
-- second graphical smoke test after the interaction/animation changes remained alive until the deliberate four-second timeout with no startup error
+- no executor, approval grant, runtime controller, or host-action authority in the shell
 
-The prototype is intentionally not part of the standard workspace, so GTK/layer-shell native dependencies do not become requirements for the platform-independent core CI. It currently uses a procedural body while the canonical body-asset loading path is validated. Its only local write is its own tiny presentation-position preference file.
+A foundation CLI demonstration now proves the end-to-end path:
+
+```text
+FoundationRuntime
+      |
+      v
+CompanionPresentationState
+      |
+      v
+CompanionPresentationEnvelope v1
+      |
+      v
+session-local atomic snapshot
+      |
+      v
+GTK shell
+```
+
+The current local JSON snapshot/polling transport is a Phase 2 prototype, not a final IPC or UI-toolkit decision.
 
 ### Lychnos-owned memory
 
@@ -557,10 +579,11 @@ Implemented and synchronized:
 
 ## Automated Tests
 
-Current expected test count:
+Current expected test counts:
 
 ```text
-152
+Core workspace:       154
+GTK shell prototype:    5
 ```
 
 Current quality gate:
@@ -618,6 +641,7 @@ Accepted ADRs currently cover:
 0035 Resource budget instrumentation abstractions
 0036 Read-only companion presentation state
 0037 Isolated Wayland visual shell prototype
+0038 Versioned read-only presentation snapshot transport
 ```
 
 ## Intentionally Mocked
@@ -703,15 +727,15 @@ Still intentionally undecided:
 
 ## Next Phase 2 Milestones
 
-Immediate next work should remain machine-independent and simulation-first.
+Immediate next work remains simulation-first around the now-live presentation boundary.
 
 Likely next steps:
 
-1. restore/validate the canonical Lychnos body asset and integrate it into the working Wayland shell, replacing the temporary procedural body without changing the locked visual identity
-2. refine the compact/expanded shell presentation around that canonical body while preserving drag, remembered position, and read-only status rendering
-3. keep real Omarchy collectors, real resource sampling, AI-provider integration, and any host execution behind their later adapter/security boundaries
-
-Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
+1. persist shell preferences such as status visibility, opacity/ghost preference, position lock, and minimized state
+2. add a safe true click-through Ghost Mode with a guaranteed restore path through the Omarchy top-bar icon
+3. expose pending-approval presentation controls without granting the shell direct execution authority
+4. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
+5. keep real collectors, AI-provider integration, and host execution behind their adapter/security boundaries
 
 ## Hardware Context
 

@@ -1,6 +1,12 @@
 use gtk::gdk::prelude::GdkCairoContextExt;
 use gtk::prelude::*;
-use std::{cell::Cell, fs, path::PathBuf, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    fs,
+    path::PathBuf,
+    rc::Rc,
+    time::Duration,
+};
 
 use gtk::{
     Application, ApplicationWindow, Box as GtkBox, DrawingArea, GestureClick, GestureDrag, Label,
@@ -9,9 +15,7 @@ use gtk::{
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lychnos_core::{
     diagnostics::DiagnosticLevel,
-    presentation::{
-        CompanionPresentationState, DiagnosticPresentation, PendingApprovalPresentation,
-    },
+    presentation::{CompanionPresentationEnvelope, CompanionPresentationState},
     runtime::RuntimeMode,
 };
 
@@ -19,6 +23,9 @@ const APP_ID: &str = "org.lychnos.prototype.shell";
 const DEFAULT_TOP_MARGIN: i32 = 36;
 const DEFAULT_RIGHT_MARGIN: i32 = 42;
 
+// Excited and Speaking are part of the canonical expression vocabulary but
+// do not have live core states until later interaction/voice phases.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompanionExpression {
     Neutral,
@@ -39,16 +46,16 @@ fn main() {
 fn build_ui(app: &Application) {
     install_css();
 
-    let state = demo_state_from_args();
-    let expression = demo_expression_from_env();
+    let initial_state = load_presentation_snapshot().unwrap_or_else(default_presentation_state);
+    let state = Rc::new(RefCell::new(initial_state));
     let dragging = Rc::new(Cell::new(false));
-    let body = build_body(&state, expression, Rc::clone(&dragging));
-    let status = build_status_card(&state);
+    let body = build_body(Rc::clone(&state), Rc::clone(&dragging));
+    let status = build_status_card(&state.borrow());
 
     let layout = GtkBox::new(Orientation::Vertical, 8);
     layout.set_halign(gtk::Align::Center);
     layout.append(&body);
-    layout.append(&status);
+    layout.append(&status.card);
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Lychnos Shell Prototype")
@@ -72,11 +79,12 @@ fn build_ui(app: &Application) {
     install_shell_interactions(
         &window,
         &body,
-        &status,
+        &status.card,
         top_margin,
         right_margin,
         Rc::clone(&dragging),
     );
+    install_live_presentation_updates(Rc::clone(&state), &body, &status);
 
     let restore_action = gtk::gio::SimpleAction::new("restore", None);
     {
@@ -469,8 +477,7 @@ fn save_shell_position(top: i32, right: i32) {
 }
 
 fn build_body(
-    state: &CompanionPresentationState,
-    expression: CompanionExpression,
+    state: Rc<RefCell<CompanionPresentationState>>,
     dragging: Rc<Cell<bool>>,
 ) -> DrawingArea {
     let area = DrawingArea::new();
@@ -488,14 +495,23 @@ fn build_body(
         .scale_simple(164, 164, gtk::gdk_pixbuf::InterpType::Bilinear)
         .expect("canonical Lychnos PNG should scale");
 
-    let mode = state.runtime_mode;
-    let approvals = state.pending_approval_count();
-    let alert = state.latest_diagnostic.is_some();
     let phase = Rc::new(Cell::new(0.0_f64));
     let draw_phase = Rc::clone(&phase);
     let draw_dragging = Rc::clone(&dragging);
+    let draw_state = Rc::clone(&state);
 
     area.set_draw_func(move |_, cr, width, height| {
+        let state = draw_state.borrow();
+        let mode = state.runtime_mode;
+        let approvals = state.pending_approval_count();
+        let alert = state.latest_diagnostic.as_ref().is_some_and(|diagnostic| {
+            matches!(
+                diagnostic.level,
+                DiagnosticLevel::Warning | DiagnosticLevel::Error
+            )
+        });
+        let expression = expression_from_state(&state);
+
         let w = f64::from(width);
         let h = f64::from(height);
         let cx = w / 2.0;
@@ -652,86 +668,160 @@ fn draw_happy_eye(cr: &gtk::cairo::Context, x: f64, y: f64) {
     let _ = cr.stroke();
 }
 
-fn demo_expression_from_env() -> CompanionExpression {
-    match std::env::var("LYCHNOS_DEMO_STATE")
-        .unwrap_or_else(|_| "normal".into())
-        .as_str()
-    {
-        "neutral" => CompanionExpression::Neutral,
-        "thinking" => CompanionExpression::Thinking,
-        "excited" => CompanionExpression::Excited,
-        "focused" | "alert" | "game" | "gamemode" => CompanionExpression::Focused,
-        "listening" | "approval" => CompanionExpression::Listening,
-        "speaking" => CompanionExpression::Speaking,
-        "disabled" => CompanionExpression::Neutral,
-        _ => CompanionExpression::Happy,
+fn expression_from_state(state: &CompanionPresentationState) -> CompanionExpression {
+    if matches!(state.runtime_mode, RuntimeMode::Disabled) {
+        return CompanionExpression::Neutral;
     }
+
+    if state.latest_diagnostic.as_ref().is_some_and(|diagnostic| {
+        matches!(
+            diagnostic.level,
+            DiagnosticLevel::Warning | DiagnosticLevel::Error
+        )
+    }) {
+        return CompanionExpression::Focused;
+    }
+
+    if state.pending_approval_count() > 0 {
+        return CompanionExpression::Listening;
+    }
+
+    if state
+        .tracked_work
+        .iter()
+        .any(|work| !work.terminal && work.cooperation_pending)
+    {
+        return CompanionExpression::Focused;
+    }
+
+    if state.tracked_work.iter().any(|work| !work.terminal) {
+        return CompanionExpression::Thinking;
+    }
+
+    if matches!(state.runtime_mode, RuntimeMode::GameMode) {
+        return CompanionExpression::Focused;
+    }
+
+    CompanionExpression::Happy
 }
 
-fn build_status_card(state: &CompanionPresentationState) -> GtkBox {
+#[derive(Clone)]
+struct StatusCard {
+    card: GtkBox,
+    mode_label: Label,
+    detail_label: Label,
+}
+
+fn build_status_card(state: &CompanionPresentationState) -> StatusCard {
     let card = GtkBox::new(Orientation::Vertical, 2);
     card.add_css_class("status-card");
 
     let title = Label::new(Some("LYCHNOS"));
     title.add_css_class("lychnos-title");
 
-    let mode = Label::new(Some(mode_label(state.runtime_mode)));
-    mode.add_css_class("mode-label");
+    let mode_label = Label::new(None);
+    mode_label.add_css_class("mode-label");
 
-    let detail = if state.pending_approval_count() > 0 {
-        format!("{} approval waiting", state.pending_approval_count())
-    } else if let Some(diagnostic) = &state.latest_diagnostic {
-        diagnostic.message.clone()
-    } else {
-        "Standing by".to_string()
-    };
-
-    let detail_label = Label::new(Some(&detail));
+    let detail_label = Label::new(None);
     detail_label.add_css_class("detail-label");
     detail_label.set_max_width_chars(34);
     detail_label.set_wrap(true);
 
     card.append(&title);
-    card.append(&mode);
+    card.append(&mode_label);
     card.append(&detail_label);
-    card
+
+    let widgets = StatusCard {
+        card,
+        mode_label,
+        detail_label,
+    };
+    update_status_card(&widgets, state);
+    widgets
 }
 
-fn demo_state_from_args() -> CompanionPresentationState {
-    let requested = std::env::var("LYCHNOS_DEMO_STATE").unwrap_or_else(|_| "normal".into());
+fn update_status_card(widgets: &StatusCard, state: &CompanionPresentationState) {
+    widgets.mode_label.set_label(mode_label(state.runtime_mode));
 
-    let runtime_mode = match requested.as_str() {
-        "game" | "gamemode" => RuntimeMode::GameMode,
-        "disabled" => RuntimeMode::Disabled,
-        _ => RuntimeMode::Normal,
-    };
+    widgets.detail_label.set_label(&status_detail(state));
+}
 
-    let pending_approvals = if requested == "approval" {
-        vec![PendingApprovalPresentation {
-            action_id: lychnos_core::action::ActionId::new("demo-approval"),
-            kind: lychnos_core::action::ActionKind::new("prototype.preview"),
-            capability: lychnos_core::action::Capability::new("prototype.preview"),
-            impact: lychnos_core::action::ActionImpact::StateChanging,
-            risk: lychnos_core::action::ActionRisk::Low,
-            reason: "Prototype approval indicator".into(),
-        }]
+fn status_detail(state: &CompanionPresentationState) -> String {
+    if let Some(approval) = state.pending_approvals.first() {
+        format!("Approval needed · {}", approval.reason)
+    } else if let Some(diagnostic) = state.latest_diagnostic.as_ref().filter(|diagnostic| {
+        matches!(
+            diagnostic.level,
+            DiagnosticLevel::Warning | DiagnosticLevel::Error
+        )
+    }) {
+        diagnostic.message.clone()
+    } else if let Some(work) = state.tracked_work.iter().find(|work| !work.terminal) {
+        format!("Working · {}", work.state.as_str())
     } else {
-        Vec::new()
-    };
-
-    let latest_diagnostic = (requested == "alert").then(|| DiagnosticPresentation {
-        level: DiagnosticLevel::Warning,
-        component: "prototype".into(),
-        message: "Terminal 3 hit a snag…".into(),
-    });
-
-    CompanionPresentationState {
-        runtime_mode,
-        diagnostics_enabled: true,
-        pending_approvals,
-        tracked_work: Vec::new(),
-        latest_diagnostic,
+        match state.runtime_mode {
+            RuntimeMode::Normal => "Standing by".to_string(),
+            RuntimeMode::GameMode => "Keeping a low profile".to_string(),
+            RuntimeMode::Disabled => "Runtime disabled".to_string(),
+        }
     }
+}
+
+fn default_presentation_state() -> CompanionPresentationState {
+    CompanionPresentationState {
+        runtime_mode: RuntimeMode::Normal,
+        diagnostics_enabled: true,
+        pending_approvals: Vec::new(),
+        tracked_work: Vec::new(),
+        latest_diagnostic: None,
+    }
+}
+
+fn presentation_snapshot_path() -> PathBuf {
+    if let Ok(path) = std::env::var("LYCHNOS_PRESENTATION_PATH") {
+        return PathBuf::from(path);
+    }
+
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/presentation-v1.json");
+    }
+
+    std::env::temp_dir().join("lychnos/presentation-v1.json")
+}
+
+fn load_presentation_snapshot() -> Option<CompanionPresentationState> {
+    let contents = fs::read_to_string(presentation_snapshot_path()).ok()?;
+    CompanionPresentationEnvelope::from_json(&contents)
+        .ok()
+        .map(|envelope| envelope.state)
+}
+
+fn install_live_presentation_updates(
+    state: Rc<RefCell<CompanionPresentationState>>,
+    body: &DrawingArea,
+    status: &StatusCard,
+) {
+    let body = body.clone();
+    let status = status.clone();
+
+    gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
+        let Some(next_state) = load_presentation_snapshot() else {
+            return gtk::glib::ControlFlow::Continue;
+        };
+
+        let changed = {
+            let current = state.borrow();
+            *current != next_state
+        };
+
+        if changed {
+            *state.borrow_mut() = next_state;
+            update_status_card(&status, &state.borrow());
+            body.queue_draw();
+        }
+
+        gtk::glib::ControlFlow::Continue
+    });
 }
 
 fn mode_accent(mode: RuntimeMode, alert: bool) -> (f64, f64, f64) {
@@ -799,5 +889,88 @@ fn install_css() {
             &css,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lychnos_core::{
+        action::{ActionId, ActionImpact, ActionKind, ActionRisk, Capability},
+        diagnostics::DiagnosticLevel,
+        executor::MockRunningWorkState,
+        presentation::{
+            DiagnosticPresentation, PendingApprovalPresentation, TrackedWorkPresentation,
+        },
+    };
+
+    fn base_state(mode: RuntimeMode) -> CompanionPresentationState {
+        CompanionPresentationState {
+            runtime_mode: mode,
+            diagnostics_enabled: true,
+            pending_approvals: Vec::new(),
+            tracked_work: Vec::new(),
+            latest_diagnostic: None,
+        }
+    }
+
+    #[test]
+    fn active_work_maps_to_thinking() {
+        let mut state = base_state(RuntimeMode::Normal);
+        state.tracked_work.push(TrackedWorkPresentation::new(
+            ActionId::new("work"),
+            MockRunningWorkState::Running,
+        ));
+
+        assert_eq!(expression_from_state(&state), CompanionExpression::Thinking);
+        assert_eq!(status_detail(&state), "Working · running");
+    }
+
+    #[test]
+    fn pending_approval_maps_to_listening_attention() {
+        let mut state = base_state(RuntimeMode::Normal);
+        state.pending_approvals.push(PendingApprovalPresentation {
+            action_id: ActionId::new("approval"),
+            kind: ActionKind::new("demo.write"),
+            capability: Capability::new("demo.write"),
+            impact: ActionImpact::StateChanging,
+            risk: ActionRisk::Moderate,
+            reason: "Change demo state".into(),
+        });
+
+        assert_eq!(
+            expression_from_state(&state),
+            CompanionExpression::Listening
+        );
+        assert_eq!(status_detail(&state), "Approval needed · Change demo state");
+    }
+
+    #[test]
+    fn game_mode_maps_to_focused_quiet_state() {
+        let state = base_state(RuntimeMode::GameMode);
+
+        assert_eq!(expression_from_state(&state), CompanionExpression::Focused);
+        assert_eq!(status_detail(&state), "Keeping a low profile");
+    }
+
+    #[test]
+    fn disabled_maps_to_neutral_safe_state() {
+        let state = base_state(RuntimeMode::Disabled);
+
+        assert_eq!(expression_from_state(&state), CompanionExpression::Neutral);
+        assert_eq!(status_detail(&state), "Runtime disabled");
+    }
+
+    #[test]
+    fn warning_overrides_idle_expression() {
+        let mut state = base_state(RuntimeMode::Normal);
+        state.latest_diagnostic = Some(DiagnosticPresentation {
+            level: DiagnosticLevel::Warning,
+            component: "test".into(),
+            message: "Something needs attention".into(),
+        });
+
+        assert_eq!(expression_from_state(&state), CompanionExpression::Focused);
+        assert_eq!(status_detail(&state), "Something needs attention");
     }
 }

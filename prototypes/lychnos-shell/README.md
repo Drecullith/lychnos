@@ -8,7 +8,7 @@ It is deliberately isolated from the main Cargo workspace so GTK4 and layer-shel
 
 The shell is presentation-only.
 
-It may consume `CompanionPresentationState`, but it does not contain:
+It consumes a versioned `CompanionPresentationEnvelope` containing read-only `CompanionPresentationState`. It does not contain:
 
 - an executor;
 - approval grants;
@@ -16,7 +16,31 @@ It may consume `CompanionPresentationState`, but it does not contain:
 - privileged helpers; or
 - direct host action methods.
 
-The current body is still procedurally drawn while the canonical body asset pipeline is validated, but its armor petals, glossy face disc, cyan expression, hover ring, and alert treatment now intentionally track the locked visual reference much more closely.
+The canonical segmented black/cyan Lychnos PNG is loaded by the shell. The cyan face is rendered separately so expressions can react to live presentation state.
+
+## Live presentation bridge
+
+The runtime-side publisher writes an authority-free snapshot to:
+
+`$XDG_RUNTIME_DIR/lychnos/presentation-v1.json`
+
+The shell validates the versioned envelope and updates its expression/status from the latest snapshot.
+
+For a safe end-to-end demonstration:
+
+```bash
+cargo build --workspace
+cargo run -p lychnos-cli -- presentation-demo
+```
+
+The demo mutates a real `FoundationRuntime` through simulation-only APIs and publishes these states:
+
+```text
+idle -> working -> approval -> Game Mode -> Disabled -> Normal
+```
+
+No operating-system action is executed.
+
 ## Omarchy dependencies
 
 The development machine currently provides:
@@ -31,34 +55,33 @@ Check the prototype with:
 cargo check --manifest-path prototypes/lychnos-shell/Cargo.toml
 ```
 
-Launch from the graphical Hyprland session with:
+Launch it from the graphical Hyprland session with:
 
 ```bash
-LYCHNOS_DEMO_STATE=normal cargo run --manifest-path prototypes/lychnos-shell/Cargo.toml
+cargo run --manifest-path prototypes/lychnos-shell/Cargo.toml
 ```
-
-Supported demo states are `normal`, `game`, `disabled`, `approval`, and `alert`.
 
 ## Prototype interaction
 
 - drag the Lychnos body to move the overlay;
 - the top/right position is remembered in `~/.config/lychnos/shell-position.conf` (or `$XDG_CONFIG_HOME/lychnos/shell-position.conf`);
-- double-click the body to hide/show the status card; and
+- double-click the body to hide/show the status card;
+- right-click for see-through, status, position lock/reset, minimize, and close controls;
+- **Minimize to top bar** hides the orb and reveals the Lychnos Omarchy bar icon;
+- clicking the small bar icon restores the orb;
 - the body has a lightweight idle float/pulse animation.
 
-The preference file stores only the two presentation offsets used by this prototype.
+The Omarchy top-bar adapter lives under `integrations/omarchy/bar/` and is kept outside the platform-independent core.
 
-The prototype uses `gtk4-layer-shell` to float at the top-right of the desktop without reserving screen space or taking keyboard focus.
+## Current live mappings
 
-It currently renders:
+- Normal idle -> happy
+- active tracked work -> thinking
+- pending approval -> listening/attention + approval indicator
+- Game Mode -> focused
+- Disabled -> neutral
+- warning/error diagnostic -> focused alert treatment
 
-- a compact procedural Lychnos body shaped around the locked segmented-shell / glossy-face / cyan-expression visual language;
-- a read-only status card;
-- distinct Normal, Game Mode, and Disabled expressions/accents;
-- a pending-approval notification pip; and
-- a sample warning/alert message;
-- drag-to-move ergonomics;
-- remembered presentation position; and
-- lightweight idle animation.
+`Excited` and `Speaking` remain in the canonical expression vocabulary for later interaction/voice phases.
 
-No real system monitoring, provider call, approval action, or host execution is performed. The only local write performed by the prototype is its own small presentation-position preference file after dragging.
+This prototype is still not a final UI-toolkit decision.

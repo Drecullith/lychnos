@@ -6,8 +6,11 @@
 
 use std::convert::Infallible;
 
+use serde::{Deserialize, Serialize};
+
 /// Severity of one ordinary diagnostic record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticLevel {
     Trace,
     Debug,

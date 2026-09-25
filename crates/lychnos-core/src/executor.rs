@@ -1,5 +1,7 @@
 //! Safe mock execution boundary for foundation-phase Lychnos.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     action::{ActionId, ActionProposal},
     approval::ApprovalGrant,
@@ -52,7 +54,8 @@ impl MockExecutionOutcome {
 }
 
 /// Observable state of one already-started mock operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MockRunningWorkState {
     /// Work is active and no pause or cancellation has been requested.
     Running,

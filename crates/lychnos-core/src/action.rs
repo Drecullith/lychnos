@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::event::EventId;
 
 /// Opaque identifier for one proposed action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ActionId(String);
 
 impl ActionId {
@@ -23,7 +25,7 @@ impl ActionId {
 }
 
 /// Opaque normalized action kind.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ActionKind(String);
 
 impl ActionKind {
@@ -41,7 +43,7 @@ impl ActionKind {
 }
 
 /// Opaque capability required to perform an action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Capability(String);
 
 impl Capability {
@@ -59,7 +61,8 @@ impl Capability {
 }
 
 /// Effect an action may have on the machine or outside world.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ActionImpact {
     /// Reads information without changing external state.
     ReadOnly,
@@ -78,7 +81,8 @@ pub enum ActionImpact {
 }
 
 /// Estimated risk associated with an action proposal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ActionRisk {
     Low,
     Moderate,

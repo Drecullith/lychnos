@@ -182,7 +182,9 @@ Defines owned read-only state intended for desktop and portable presentation lay
 
 The current `CompanionPresentationState` projects runtime mode, pending approvals, tracked simulation work, and the latest ordinary diagnostic without exposing approval grants, executors, runtime controllers, or mutation handles.
 
-This allows an early visual shell to depend on core state without becoming an execution authority.
+A versioned `CompanionPresentationEnvelope` provides a serializable read-only wire contract. The current Phase 2 runtime publisher atomically writes this projection to a session-local snapshot, and presentation processes may consume that snapshot without gaining runtime authority.
+
+This allows an early visual shell to follow live core state without becoming an execution authority.
 
 ### visual shell prototype
 
@@ -190,7 +192,9 @@ This allows an early visual shell to depend on core state without becoming an ex
 
 It is deliberately outside the main Cargo workspace so Linux desktop native dependencies do not become requirements for the platform-independent core or its standard CI.
 
-The shell uses presentation-domain data only, requests no keyboard interactivity, reserves no screen space, and currently renders a temporary procedural Lychnos body plus status card. The canonical body asset will replace the temporary drawing only after its loading path is validated.
+The shell uses presentation-domain data only, requests no keyboard interactivity, reserves no screen space, and renders the validated canonical Lychnos body asset with state-driven cyan expressions plus a compact status card.
+
+It now follows the versioned read-only presentation snapshot produced by a separately owned `FoundationRuntime`. The current JSON/session-file transport is intentionally replaceable and is not a final IPC decision.
 
 This prototype is not a final UI-toolkit decision.
 

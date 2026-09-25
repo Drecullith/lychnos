@@ -4,6 +4,8 @@
 //! controllers, executors, or mutation handles. A UI may render this state,
 //! but it does not gain authority by receiving it.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     action::{ActionId, ActionImpact, ActionKind, ActionProposal, ActionRisk, Capability},
     diagnostics::{DiagnosticLevel, DiagnosticRecord},
@@ -12,7 +14,7 @@ use crate::{
 };
 
 /// UI-facing summary of one action awaiting explicit approval.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingApprovalPresentation {
     pub action_id: ActionId,
     pub kind: ActionKind,
@@ -36,7 +38,7 @@ impl From<&ActionProposal> for PendingApprovalPresentation {
 }
 
 /// UI-facing summary of one tracked simulation-only work item.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackedWorkPresentation {
     pub action_id: ActionId,
     pub state: MockRunningWorkState,
@@ -57,7 +59,7 @@ impl TrackedWorkPresentation {
 }
 
 /// UI-facing copy of one ordinary diagnostic record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagnosticPresentation {
     pub level: DiagnosticLevel,
     pub component: String,
@@ -75,13 +77,62 @@ impl From<&DiagnosticRecord> for DiagnosticPresentation {
 }
 
 /// Read-only snapshot consumed by a future desktop or portable presentation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompanionPresentationState {
     pub runtime_mode: RuntimeMode,
     pub diagnostics_enabled: bool,
     pub pending_approvals: Vec<PendingApprovalPresentation>,
     pub tracked_work: Vec<TrackedWorkPresentation>,
     pub latest_diagnostic: Option<DiagnosticPresentation>,
+}
+
+/// Current wire schema for read-only companion presentation snapshots.
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
+
+/// Versioned, authority-free snapshot transported from the runtime owner to
+/// presentation processes.
+///
+/// The envelope carries only CompanionPresentationState. It never contains
+/// executors, approval grants, runtime controllers, or mutation handles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionPresentationEnvelope {
+    pub schema_version: u32,
+    pub state: CompanionPresentationState,
+}
+
+impl CompanionPresentationEnvelope {
+    #[must_use]
+    pub const fn new(state: CompanionPresentationState) -> Self {
+        Self {
+            schema_version: PRESENTATION_SCHEMA_VERSION,
+            state,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn from_json(input: &str) -> Result<Self, PresentationEnvelopeError> {
+        let envelope: Self = serde_json::from_str(input)
+            .map_err(|error| PresentationEnvelopeError::Parse(error.to_string()))?;
+
+        if envelope.schema_version != PRESENTATION_SCHEMA_VERSION {
+            return Err(PresentationEnvelopeError::UnsupportedSchemaVersion {
+                found: envelope.schema_version,
+                supported: PRESENTATION_SCHEMA_VERSION,
+            });
+        }
+
+        Ok(envelope)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresentationEnvelopeError {
+    Parse(String),
+    UnsupportedSchemaVersion { found: u32, supported: u32 },
 }
 
 impl CompanionPresentationState {
@@ -151,6 +202,68 @@ mod tests {
         );
         assert!(!completed.cooperation_pending);
         assert!(completed.terminal);
+    }
+
+    #[test]
+    fn presentation_envelope_round_trips_without_authority() {
+        let state = CompanionPresentationState {
+            runtime_mode: RuntimeMode::GameMode,
+            diagnostics_enabled: true,
+            pending_approvals: vec![PendingApprovalPresentation {
+                action_id: ActionId::new("action-wire"),
+                kind: ActionKind::new("file.write"),
+                capability: Capability::new("file.write"),
+                impact: ActionImpact::StateChanging,
+                risk: ActionRisk::Moderate,
+                reason: "Write one file".into(),
+            }],
+            tracked_work: vec![TrackedWorkPresentation::new(
+                ActionId::new("work-wire"),
+                MockRunningWorkState::PauseRequested,
+            )],
+            latest_diagnostic: Some(DiagnosticPresentation {
+                level: DiagnosticLevel::Warning,
+                component: "runtime".into(),
+                message: "example warning".into(),
+            }),
+        };
+
+        let envelope = CompanionPresentationEnvelope::new(state.clone());
+        let json = envelope
+            .to_json()
+            .expect("presentation envelope should serialize");
+        let decoded = CompanionPresentationEnvelope::from_json(&json)
+            .expect("presentation envelope should decode");
+
+        assert_eq!(decoded.schema_version, PRESENTATION_SCHEMA_VERSION);
+        assert_eq!(decoded.state, state);
+    }
+
+    #[test]
+    fn presentation_envelope_rejects_unknown_schema_version() {
+        let state = CompanionPresentationState {
+            runtime_mode: RuntimeMode::Normal,
+            diagnostics_enabled: true,
+            pending_approvals: Vec::new(),
+            tracked_work: Vec::new(),
+            latest_diagnostic: None,
+        };
+        let mut envelope = CompanionPresentationEnvelope::new(state);
+        envelope.schema_version += 1;
+
+        let json = envelope
+            .to_json()
+            .expect("presentation envelope should serialize");
+        let error = CompanionPresentationEnvelope::from_json(&json)
+            .expect_err("future schema must fail closed");
+
+        assert_eq!(
+            error,
+            PresentationEnvelopeError::UnsupportedSchemaVersion {
+                found: PRESENTATION_SCHEMA_VERSION + 1,
+                supported: PRESENTATION_SCHEMA_VERSION,
+            }
+        );
     }
 
     #[test]

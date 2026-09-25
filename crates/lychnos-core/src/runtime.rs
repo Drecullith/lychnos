@@ -1,5 +1,7 @@
 //! Runtime safety state for Lychnos.
 
+use serde::{Deserialize, Serialize};
+
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -7,7 +9,8 @@ use std::sync::{
 
 /// Current operating mode of the Lychnos runtime.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeMode {
     /// Normal Lychnos operation.
     #[default]
