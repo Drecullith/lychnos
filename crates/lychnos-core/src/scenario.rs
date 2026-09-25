@@ -5,12 +5,12 @@
 //! Phase 2 can exercise stateful behavior across multiple steps.
 
 use crate::{
-    action::ActionProposal,
+    action::{ActionId, ActionProposal},
     collector::Collector,
-    executor::MockExecutionOutcome,
+    executor::{MockExecutionOutcome, MockRunningWorkState},
     orchestrator::{
-        CollectorCycleError, FoundationCycle, FoundationRuntime, PendingActionCancellationReason,
-        PendingActionError,
+        CollectorCycleError, FoundationCycle, FoundationRuntime, MockWorkError,
+        PendingActionCancellationReason, PendingActionError,
     },
     providers::{IdProvider, TimeProvider},
     runtime::RuntimeTransition,
@@ -43,6 +43,24 @@ pub enum ScenarioStep {
         reason: PendingActionCancellationReason,
     },
 
+    /// Start one simulation-only running-work record.
+    StartMockWork(ActionId),
+
+    /// Inspect one simulation-only running-work record.
+    InspectMockWork(ActionId),
+
+    /// Acknowledge one Game Mode pause request.
+    ConfirmMockWorkGameModePause(ActionId),
+
+    /// Explicitly resume one work item after Game Mode.
+    ResumeMockWork(ActionId),
+
+    /// Confirm Disabled-mode cancellation for one work item.
+    ConfirmMockWorkCancellation(ActionId),
+
+    /// Mark one simulation-only work item as completed.
+    CompleteMockWork(ActionId),
+
     /// Request Game Mode.
     EnterGameMode,
 
@@ -70,6 +88,12 @@ pub enum ScenarioStepResult<E> {
 
     /// Result of system-driven cancellation of one exact pending proposal.
     Cancellation(Result<(), PendingActionError>),
+
+    /// Result of starting or transitioning one simulation-only work item.
+    MockWork(Result<MockRunningWorkState, MockWorkError>),
+
+    /// Current state of one simulation-only work item.
+    MockWorkInspection(Option<MockRunningWorkState>),
 
     /// Result of one requested runtime-mode transition.
     RuntimeTransition(RuntimeTransition),
@@ -116,6 +140,24 @@ where
             }
             ScenarioStep::Cancel { proposal, reason } => {
                 ScenarioStepResult::Cancellation(runtime.cancel_pending_action(&proposal, reason))
+            }
+            ScenarioStep::StartMockWork(action_id) => {
+                ScenarioStepResult::MockWork(runtime.start_mock_work(action_id))
+            }
+            ScenarioStep::InspectMockWork(action_id) => {
+                ScenarioStepResult::MockWorkInspection(runtime.mock_work_state(&action_id))
+            }
+            ScenarioStep::ConfirmMockWorkGameModePause(action_id) => {
+                ScenarioStepResult::MockWork(runtime.confirm_mock_work_game_mode_pause(&action_id))
+            }
+            ScenarioStep::ResumeMockWork(action_id) => {
+                ScenarioStepResult::MockWork(runtime.resume_mock_work(&action_id))
+            }
+            ScenarioStep::ConfirmMockWorkCancellation(action_id) => {
+                ScenarioStepResult::MockWork(runtime.confirm_mock_work_cancellation(&action_id))
+            }
+            ScenarioStep::CompleteMockWork(action_id) => {
+                ScenarioStepResult::MockWork(runtime.complete_mock_work(&action_id))
             }
             ScenarioStep::EnterGameMode => {
                 ScenarioStepResult::RuntimeTransition(runtime.enter_game_mode())
@@ -522,6 +564,72 @@ mod tests {
         ));
 
         assert!(runtime.pending_action(&proposal.id).is_none());
+        assert_eq!(runtime.mode(), RuntimeMode::Normal);
+    }
+
+    #[test]
+    fn scenario_tracks_pause_resume_and_disabled_cancellation_for_running_work() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let action_id = ActionId::new("scenario-running-work");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::StartMockWork(action_id.clone()),
+                ScenarioStep::EnterGameMode,
+                ScenarioStep::InspectMockWork(action_id.clone()),
+                ScenarioStep::ConfirmMockWorkGameModePause(action_id.clone()),
+                ScenarioStep::EnableNormal,
+                ScenarioStep::InspectMockWork(action_id.clone()),
+                ScenarioStep::ResumeMockWork(action_id.clone()),
+                ScenarioStep::Disable,
+                ScenarioStep::InspectMockWork(action_id.clone()),
+                ScenarioStep::ConfirmMockWorkCancellation(action_id.clone()),
+                ScenarioStep::EnableNormal,
+                ScenarioStep::InspectMockWork(action_id.clone()),
+            ],
+        );
+
+        assert_eq!(
+            results[0],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::Running))
+        );
+        assert_eq!(
+            results[2],
+            ScenarioStepResult::MockWorkInspection(Some(MockRunningWorkState::PauseRequested))
+        );
+        assert_eq!(
+            results[3],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::PausedForGameMode))
+        );
+        assert_eq!(
+            results[5],
+            ScenarioStepResult::MockWorkInspection(Some(MockRunningWorkState::PausedForGameMode))
+        );
+        assert_eq!(
+            results[6],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::Running))
+        );
+        assert_eq!(
+            results[8],
+            ScenarioStepResult::MockWorkInspection(Some(
+                MockRunningWorkState::CancellationRequested
+            ))
+        );
+        assert_eq!(
+            results[9],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::StoppedAfterCancellation))
+        );
+        assert_eq!(
+            results[11],
+            ScenarioStepResult::MockWorkInspection(Some(
+                MockRunningWorkState::StoppedAfterCancellation
+            ))
+        );
+
+        assert_eq!(runtime.mock_work_items_len(), 1);
         assert_eq!(runtime.mode(), RuntimeMode::Normal);
     }
 }

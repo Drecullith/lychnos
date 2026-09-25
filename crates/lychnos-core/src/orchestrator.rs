@@ -12,9 +12,12 @@ use crate::{
     config::LychnosConfig,
     diagnostics::{DiagnosticLevel, DiagnosticRecord, DiagnosticSink, InMemoryDiagnosticLog},
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
-    executor::{MockExecutionOutcome, MockExecutor},
+    executor::{
+        MockExecutionOutcome, MockExecutor, MockRunningWork, MockRunningWorkState,
+        MockRunningWorkTransitionError,
+    },
     providers::{IdProvider, TimeProvider},
-    runtime::{RuntimeController, RuntimeMode, RuntimeTransition},
+    runtime::{RuntimeController, RuntimeMode, RuntimeTransition, RuntimeWorkStartError},
 };
 
 /// Result of processing one event through the foundation pipeline.
@@ -51,6 +54,22 @@ pub enum CollectorCycleError<E> {
 
     /// The event reached the runtime but internal delivery failed.
     Runtime(FoundationRuntimeError),
+}
+
+/// Failure while tracking simulation-only running work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockWorkError {
+    /// The simulation already tracks work under this action identifier.
+    AlreadyTracked { action_id: ActionId },
+
+    /// No simulated work is tracked under this action identifier.
+    NotTracked { action_id: ActionId },
+
+    /// Live runtime safety blocked the simulated work start.
+    StartBlocked(RuntimeWorkStartError),
+
+    /// The requested simulated lifecycle transition was invalid.
+    Transition(MockRunningWorkTransitionError),
 }
 
 /// Failure while acting on a proposal that should still be pending approval.
@@ -105,6 +124,7 @@ pub struct FoundationRuntime<I, T> {
     diagnostics: InMemoryDiagnosticLog,
     diagnostics_enabled: bool,
     pending_actions: BTreeMap<ActionId, ActionProposal>,
+    mock_work: BTreeMap<ActionId, MockRunningWork>,
     ids: I,
     clock: T,
 }
@@ -140,6 +160,7 @@ where
             diagnostics: InMemoryDiagnosticLog::new(),
             diagnostics_enabled,
             pending_actions: BTreeMap::new(),
+            mock_work: BTreeMap::new(),
             ids,
             clock,
         };
@@ -205,6 +226,98 @@ where
     #[must_use]
     pub fn pending_actions_len(&self) -> usize {
         self.pending_actions.len()
+    }
+
+    /// Starts one simulation-only running-work record.
+    ///
+    /// This does not authorize or perform an operating-system action. It only
+    /// lets Phase 2 scenarios exercise lifecycle behavior against the live
+    /// runtime controller.
+    pub fn start_mock_work(
+        &mut self,
+        action_id: ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        if self.mock_work.contains_key(&action_id) {
+            return Err(MockWorkError::AlreadyTracked { action_id });
+        }
+
+        let lease = self
+            .runtime
+            .try_begin_work()
+            .map_err(MockWorkError::StartBlocked)?;
+
+        let work = MockRunningWork::new(action_id.clone(), lease);
+        let state = work.state();
+        self.mock_work.insert(action_id, work);
+
+        Ok(state)
+    }
+
+    /// Returns the current state of one tracked simulation-only work item.
+    #[must_use]
+    pub fn mock_work_state(&self, action_id: &ActionId) -> Option<MockRunningWorkState> {
+        self.mock_work.get(action_id).map(MockRunningWork::state)
+    }
+
+    /// Returns the number of simulation-only work items retained for lifecycle
+    /// inspection, including terminal states.
+    #[must_use]
+    pub fn mock_work_items_len(&self) -> usize {
+        self.mock_work.len()
+    }
+
+    /// Acknowledges a Game Mode pause request for one tracked work item.
+    pub fn confirm_mock_work_game_mode_pause(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        let work = self.mock_work_mut(action_id)?;
+        work.confirm_game_mode_pause()
+            .map_err(MockWorkError::Transition)?;
+        Ok(work.state())
+    }
+
+    /// Explicitly resumes one tracked work item after Game Mode.
+    pub fn resume_mock_work(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        let work = self.mock_work_mut(action_id)?;
+        work.resume_after_game_mode()
+            .map_err(MockWorkError::Transition)?;
+        Ok(work.state())
+    }
+
+    /// Confirms Disabled-mode cancellation for one tracked work item.
+    pub fn confirm_mock_work_cancellation(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        let work = self.mock_work_mut(action_id)?;
+        work.confirm_cancellation()
+            .map_err(MockWorkError::Transition)?;
+        Ok(work.state())
+    }
+
+    /// Marks one tracked work item as normally completed.
+    pub fn complete_mock_work(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        let work = self.mock_work_mut(action_id)?;
+        work.complete().map_err(MockWorkError::Transition)?;
+        Ok(work.state())
+    }
+
+    fn mock_work_mut(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<&mut MockRunningWork, MockWorkError> {
+        self.mock_work
+            .get_mut(action_id)
+            .ok_or_else(|| MockWorkError::NotTracked {
+                action_id: action_id.clone(),
+            })
     }
 
     fn emit_diagnostic(
@@ -776,6 +889,96 @@ mod tests {
             "test-analyzer",
         )
         .with_source_event(EventId::new(format!("event-for-{id}")))
+    }
+
+    #[test]
+    fn mock_work_start_respects_live_runtime_mode() {
+        let mut game = runtime(RuntimeMode::GameMode);
+        assert_eq!(
+            game.start_mock_work(ActionId::new("work-game")),
+            Err(MockWorkError::StartBlocked(RuntimeWorkStartError::GameMode))
+        );
+
+        let mut disabled = runtime(RuntimeMode::Disabled);
+        assert_eq!(
+            disabled.start_mock_work(ActionId::new("work-disabled")),
+            Err(MockWorkError::StartBlocked(RuntimeWorkStartError::Disabled))
+        );
+
+        assert_eq!(game.mock_work_items_len(), 0);
+        assert_eq!(disabled.mock_work_items_len(), 0);
+    }
+
+    #[test]
+    fn mock_work_registry_tracks_pause_resume_and_disabled_cancellation() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let action_id = ActionId::new("work-lifecycle");
+
+        assert_eq!(
+            runtime.start_mock_work(action_id.clone()),
+            Ok(MockRunningWorkState::Running)
+        );
+        assert_eq!(runtime.mock_work_items_len(), 1);
+
+        runtime.enter_game_mode();
+        assert_eq!(
+            runtime.mock_work_state(&action_id),
+            Some(MockRunningWorkState::PauseRequested)
+        );
+
+        assert_eq!(
+            runtime.confirm_mock_work_game_mode_pause(&action_id),
+            Ok(MockRunningWorkState::PausedForGameMode)
+        );
+
+        runtime.enable_normal();
+        assert_eq!(
+            runtime.mock_work_state(&action_id),
+            Some(MockRunningWorkState::PausedForGameMode)
+        );
+        assert_eq!(
+            runtime.resume_mock_work(&action_id),
+            Ok(MockRunningWorkState::Running)
+        );
+
+        runtime.disable();
+        assert_eq!(
+            runtime.mock_work_state(&action_id),
+            Some(MockRunningWorkState::CancellationRequested)
+        );
+        assert_eq!(
+            runtime.confirm_mock_work_cancellation(&action_id),
+            Ok(MockRunningWorkState::StoppedAfterCancellation)
+        );
+
+        runtime.enable_normal();
+        assert_eq!(
+            runtime.mock_work_state(&action_id),
+            Some(MockRunningWorkState::StoppedAfterCancellation)
+        );
+    }
+
+    #[test]
+    fn mock_work_registry_rejects_duplicate_and_unknown_items() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let action_id = ActionId::new("work-duplicate");
+
+        assert_eq!(
+            runtime.start_mock_work(action_id.clone()),
+            Ok(MockRunningWorkState::Running)
+        );
+        assert_eq!(
+            runtime.start_mock_work(action_id.clone()),
+            Err(MockWorkError::AlreadyTracked {
+                action_id: action_id.clone(),
+            })
+        );
+
+        let missing = ActionId::new("work-missing");
+        assert_eq!(
+            runtime.complete_mock_work(&missing),
+            Err(MockWorkError::NotTracked { action_id: missing })
+        );
     }
 
     #[test]
