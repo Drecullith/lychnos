@@ -112,6 +112,7 @@ name = "lychnos-runtime"
 version = "0.1.0"
 dependencies = [
  "lychnos-core",
+ "serde_json",
 ]
 
 [[package]]

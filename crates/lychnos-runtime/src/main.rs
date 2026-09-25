@@ -1,3 +1,5 @@
+mod audio;
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -35,6 +37,7 @@ fn main() {
     let persona = PersonaProfile::lychnos_default();
     let provider = MockConversationProvider;
 
+    report_audio_inputs();
     ensure_runtime_directories();
     publish_snapshot(&runtime);
 
@@ -52,6 +55,33 @@ fn main() {
         }
 
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn report_audio_inputs() {
+    match audio::discover_pipewire_inputs() {
+        Ok(devices) if devices.is_empty() => {
+            println!("Audio inputs: none detected");
+        }
+        Ok(devices) => {
+            println!("Audio inputs detected: {}", devices.len());
+            for device in devices {
+                let default_marker = if device.is_default { " [default]" } else { "" };
+                let channels = device
+                    .channel_count
+                    .map_or_else(|| "?ch".to_string(), |count| format!("{count}ch"));
+                println!(
+                    "  - {} · {} · {}{}",
+                    device.display_name,
+                    channels,
+                    device.id.as_str(),
+                    default_marker
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!("Audio input discovery unavailable: {error}");
+        }
     }
 }
 

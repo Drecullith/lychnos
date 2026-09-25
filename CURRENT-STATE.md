@@ -391,6 +391,10 @@ Implemented:
 - deterministic local mock conversation provider for safe end-to-end interaction testing
 - canonical provider-neutral `lychnos.default.v1` persona profile
 - normalized interaction sources for Typed, Push-to-Talk, Wake Word, and Voice Session
+- platform-neutral `AudioInputDevice` and voice-activation vocabulary
+- Omarchy PipeWire microphone discovery through structured `pw-dump` data
+- default-source detection through `wpctl` without opening or recording the microphone
+- live runtime detection of the Ryzen/ALC245 default capture source on the X1 Pro
 - lightweight idle float/pulse animation
 - no executor, approval grant, runtime controller, or host-action authority in the shell
 
@@ -600,7 +604,7 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       159
+Core workspace:       161
 GTK shell prototype:    5
 ```
 
@@ -663,6 +667,7 @@ Accepted ADRs currently cover:
 0039 Presentation control intents
 0040 Provider-neutral interaction and persona
 0041 User runtime and shell process split
+0042 Normalized voice input and PipeWire discovery
 ```
 
 ## Intentionally Mocked

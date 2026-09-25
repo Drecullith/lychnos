@@ -214,6 +214,12 @@ It follows the versioned read-only presentation snapshot produced by the separat
 
 This prototype is not a final UI-toolkit decision.
 
+### voice
+
+Defines platform-neutral audio-input identities and voice-activation modes without depending on PipeWire, ALSA, or another host audio API.
+
+The Omarchy runtime currently discovers `Audio/Source` nodes through structured `pw-dump` data and marks the active default source using `wpctl`. Discovery is diagnostic only and does not capture audio. Push-to-talk will be the first explicit capture trigger; wake-word and voice-session modes will reuse the same normalized input model.
+
 ### memory
 
 Defines Lychnos-owned, model-independent memory records and the `MemoryStore` interface.

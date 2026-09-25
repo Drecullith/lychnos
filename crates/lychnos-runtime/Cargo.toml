@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 lychnos-core = { path = "../lychnos-core" }
+serde_json.workspace = true
