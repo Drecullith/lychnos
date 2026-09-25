@@ -208,6 +208,14 @@ Defines a bounded provider-neutral path for proactive Lychnos speech. An `Initia
 
 Initiative carries text only. It has no executor, approval grant, shell-command path, or mutation authority. Game Mode and Disabled mode suppress AI initiative entirely.
 
+### intelligence
+
+Defines capability-aware routing without coupling Lychnos to one model, runtime, operating system, or commercial provider.
+
+The core models broad body platforms, normalized hardware capabilities, local-brain resource classes, portable model manifests, and Local / AccountBridge / optional ApiByok routes. Local is the no-subscription baseline. Platform adapters decide how to probe real hardware and which runtime/model implementation fits the current body.
+
+A desktop may therefore run a larger GGUF model through llama.cpp while an Android, iOS, or Pocket body selects a smaller or platform-native model, all behind the same Lychnos conversation/persona/initiative contracts.
+
 ### visual shell prototype
 
 `prototypes/lychnos-shell` is an isolated Omarchy/Wayland experiment built with GTK4 and gtk4-layer-shell.

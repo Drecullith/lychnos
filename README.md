@@ -22,7 +22,7 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 - [Current state](CURRENT-STATE.md)
 - [Architecture decisions](docs/decisions/)
 
-The codebase is still foundation-first. Typed interaction, local push-to-talk capture, and local speech-to-text now exist, while real Omarchy monitoring, a real AI provider, text-to-speech, wake-word activation, and system execution remain behind explicit adapter/security boundaries.
+The codebase is still foundation-first. Typed interaction, local push-to-talk capture, local speech-to-text, and local speech output now exist. Lychnos now also has capability-aware intelligence routing so desktops, phones, and future Pocket bodies can choose different local-brain implementations without changing identity, memory, persona, permissions, or initiative. Real contextual collectors, live local-brain adapters, account-backed intelligence bridges, wake-word activation, and system execution remain behind explicit adapter/security boundaries.
 
 ## Omarchy development install
 

@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod event;
 pub mod executor;
 pub mod initiative;
+pub mod intelligence;
 pub mod interaction;
 pub mod memory;
 pub mod orchestrator;

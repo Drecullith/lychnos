@@ -604,7 +604,7 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       171
+Core workspace:       177
 Runtime adapter tests:   5
 GTK shell prototype:     5
 ```
@@ -672,6 +672,7 @@ Accepted ADRs currently cover:
 0043 Local push-to-talk speech recognition
 0044 Provider-neutral local text-to-speech
 0045 Bounded character initiative
+0046 Capability-aware intelligence routing across bodies
 ```
 
 ## Intentionally Mocked
@@ -701,7 +702,7 @@ Lychnos does **not** currently have:
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
 - live initiative provider/runtime scheduling (the bounded core policy now exists)
-- local LLM integration
+- platform-specific LocalBrain adapters and model manifests (the cross-body routing policy now exists)
 - GPU/iGPU acceleration
 - real privileged execution
 - real shell-command execution
@@ -760,11 +761,11 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. connect a real AI provider behind `ConversationProvider` and `InitiativeProvider` while keeping Lychnos persona/memory provider-independent
-2. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
-3. add wake-word activation on the existing local voice pipeline
-4. add explicit voice/persona settings and user-tunable text/voice/both behavior
-5. add speech interruption/ducking and output-device selection
+1. implement the first capability-aware LocalBrain adapter on Omarchy without making its runtime/model universal
+2. define a portable model-manifest/catalog flow for Tiny, Compact, Standard, and Large bodies
+3. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
+4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
+5. add wake-word activation on the existing local voice pipeline
 6. keep real collectors and host execution behind their adapter/security boundaries
 
 ## Hardware Context
