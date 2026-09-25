@@ -176,7 +176,6 @@ Implemented:
 
 - `ApprovalGrant` bound to the complete structured `ActionProposal`
 - crate-private approval-grant construction
-- approval-grant construction remains crate-private
 - approval grants are issued internally only after exact pending-proposal verification
 - explicit `ActionApproved` security-audit records
 - approving actor label captured in the approval audit record
@@ -302,6 +301,19 @@ Implemented:
 
 The core still deliberately does not choose a permanent config path, environment-variable precedence, CLI override precedence, secrets storage, or live reload behavior.
 
+### Typed configuration runtime consumption
+
+Implemented:
+
+- `FoundationRuntime::from_config(...)`
+- live runtime startup mode derived from `LychnosConfig.runtime.startup_mode`
+- typed startup coverage for Normal, Game Mode, and Disabled
+- CLI now constructs typed `LychnosConfig` before creating the runtime
+- CLI simulation arguments temporarily modify typed config rather than bypassing it
+- filesystem/config-discovery policy remains outside the machine-independent core
+
+Only `runtime.startup_mode` is consumed by the runtime so far. Memory, diagnostics, privacy, persistence, and provider-related settings will be wired into their owning subsystems incrementally.
+
 ### ID and time providers
 
 Implemented:
@@ -393,7 +405,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-89
+90
 ```
 
 Current quality gate:
@@ -436,6 +448,7 @@ Accepted ADRs currently cover:
 0020 Bound action approval grants
 0021 Pending action approval runtime flow
 0022 Explicit pending action rejection
+0023 Typed configuration runtime consumption
 ```
 
 ## Intentionally Mocked
@@ -521,10 +534,9 @@ Immediate next work should remain machine-independent and simulation-first.
 Likely next steps:
 
 1. define system-driven cancellation semantics separately from explicit user rejection
-2. wire typed configuration into the application runtime
-3. integrate ordinary diagnostics without weakening the mandatory security audit
-4. add richer deterministic scenarios and failure injection
-5. define cancellation semantics for already-running work before any real executor exists
+2. integrate ordinary diagnostics without weakening the mandatory security audit
+3. add richer deterministic scenarios and failure injection
+4. define cancellation semantics for already-running work before any real executor exists
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
