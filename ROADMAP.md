@@ -92,7 +92,8 @@ Likely work:
 - tracked mock running-work lifecycle through the foundation runtime and deterministic scenario runner
 - resource-budget instrumentation abstractions for later Game Mode testing (typed observations, explicit units, mode-specific budgets, mismatch handling, and in-memory observation log now implemented; real sampling remains deferred)
 - read-only presentation-state projection for an early visual-shell prototype without granting UI execution authority (implemented)
-- thin desktop visual-shell prototype around the canonical floating Lychnos body, consuming projected state only
+- isolated Omarchy/Wayland desktop visual-shell prototype using GTK4 + layer shell, consuming presentation-domain state only (implemented with a temporary procedural body; canonical asset integration remains)
+- lightweight floating/idle animation and canonical body-asset integration for the visual prototype
 
 This phase should make it possible to exercise Lychnos behavior end to end before granting it meaningful access to the host system.
 

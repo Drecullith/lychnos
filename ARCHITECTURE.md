@@ -184,6 +184,16 @@ The current `CompanionPresentationState` projects runtime mode, pending approval
 
 This allows an early visual shell to depend on core state without becoming an execution authority.
 
+### visual shell prototype
+
+`prototypes/lychnos-shell` is an isolated Omarchy/Wayland experiment built with GTK4 and gtk4-layer-shell.
+
+It is deliberately outside the main Cargo workspace so Linux desktop native dependencies do not become requirements for the platform-independent core or its standard CI.
+
+The shell uses presentation-domain data only, requests no keyboard interactivity, reserves no screen space, and currently renders a temporary procedural Lychnos body plus status card. The canonical body asset will replace the temporary drawing only after its loading path is validated.
+
+This prototype is not a final UI-toolkit decision.
+
 ### memory
 
 Defines Lychnos-owned, model-independent memory records and the `MemoryStore` interface.

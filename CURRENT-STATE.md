@@ -352,6 +352,23 @@ Implemented:
 
 This boundary exists so an early floating-body UI can render safe simulated/projected state without gaining execution authority.
 
+### Omarchy floating visual-shell prototype
+
+Implemented:
+
+- isolated `prototypes/lychnos-shell` Rust binary outside the main Cargo workspace
+- GTK4 + gtk4-layer-shell on the Omarchy/Hyprland development machine
+- non-exclusive Wayland overlay surface anchored near the top-right
+- no keyboard interactivity and no reserved screen space
+- temporary procedural black/cyan Lychnos body
+- compact status card
+- distinct safe demo presentation for Normal, Game Mode, Disabled, approval-waiting, and alert states
+- dependency on `lychnos-core` presentation-domain types only
+- separate prototype `cargo check` passes on the Omarchy machine
+- graphical launch smoke test remained alive until the deliberate four-second test timeout, with no startup error
+
+The prototype is intentionally not part of the standard workspace, so GTK/layer-shell native dependencies do not become requirements for the platform-independent core CI. It currently uses a procedural body while the canonical body-asset loading path is validated.
+
 ### Lychnos-owned memory
 
 Implemented:
@@ -595,6 +612,7 @@ Accepted ADRs currently cover:
 0034 Deterministic running-work cooperation windows
 0035 Resource budget instrumentation abstractions
 0036 Read-only companion presentation state
+0037 Isolated Wayland visual shell prototype
 ```
 
 ## Intentionally Mocked
@@ -623,7 +641,7 @@ Lychnos does **not** currently have:
 - microphone capture
 - speech-to-text
 - text-to-speech
-- graphical orb UI
+- production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
 - local LLM integration
 - GPU/iGPU acceleration
@@ -684,8 +702,8 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. build a thin desktop visual-shell prototype around the canonical floating Lychnos body using the read-only presentation state
-2. wire safe simulated mode/status changes into that shell so Normal, Game Mode, Disabled, approvals, and alerts are visibly distinct
+1. validate and integrate the canonical Lychnos body asset into the working Wayland shell, replacing the temporary procedural body without changing the locked visual identity
+2. add lightweight floating/idle animation and safe shell ergonomics while keeping status/approval/alert rendering read-only
 3. keep real Omarchy collectors, real resource sampling, AI-provider integration, and any host execution behind their later adapter/security boundaries
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
