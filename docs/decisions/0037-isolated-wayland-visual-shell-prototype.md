@@ -15,6 +15,7 @@ The Omarchy development machine already provides GTK4, gtk4-layer-shell, Wayland
 Create an isolated prototype crate at `prototypes/lychnos-shell`.
 
 The prototype is deliberately **not** a member of the main Cargo workspace. It depends on `lychnos-core` by path and carries its own lockfile so native GUI dependencies stay outside the standard core quality gate.
+
 The prototype uses GTK4 plus gtk4-layer-shell to create a non-exclusive overlay surface on the Omarchy Wayland session.
 
 Current behavior:
@@ -25,17 +26,24 @@ Current behavior:
 - renders a temporary procedural black/cyan Lychnos body;
 - renders a compact status card;
 - supports safe demo presentation states for Normal, Game Mode, Disabled, pending approval, and alert;
-- consumes presentation-domain types only; and
+- consumes presentation-domain types only;
+- supports drag-to-move by updating layer-shell top/right margins;
+- remembers only its own presentation position under the user's Lychnos config directory;
+- double-clicks collapse/expand the status card;
+- includes lightweight idle float/pulse animation; and
 - performs no host monitoring or execution.
 
 The procedural body is temporary. Canonical body-asset loading will be integrated only after the asset-loading path is validated rather than silently replacing the canonical design.
+
 ## Security Boundary
 
 The prototype does not contain an executor, approval grant, runtime controller, privileged helper, or direct host-action path.
 
 Its demo states are presentation data, not runtime authority.
 
-Closing, displaying, or changing a demo state cannot authorize an action.
+Closing, displaying, moving, or changing a demo state cannot authorize an action.
+
+The only local write performed by the prototype is its own small presentation-position preference file.
 
 ## Consequences
 

@@ -366,8 +366,13 @@ Implemented:
 - dependency on `lychnos-core` presentation-domain types only
 - separate prototype `cargo check` passes on the Omarchy machine
 - graphical launch smoke test remained alive until the deliberate four-second test timeout, with no startup error
+- drag-to-move shell interaction using live top/right layer-shell margins
+- remembered presentation position under the user's Lychnos config directory
+- double-click status-card collapse/expand
+- lightweight idle float/pulse animation
+- second graphical smoke test after the interaction/animation changes remained alive until the deliberate four-second timeout with no startup error
 
-The prototype is intentionally not part of the standard workspace, so GTK/layer-shell native dependencies do not become requirements for the platform-independent core CI. It currently uses a procedural body while the canonical body-asset loading path is validated.
+The prototype is intentionally not part of the standard workspace, so GTK/layer-shell native dependencies do not become requirements for the platform-independent core CI. It currently uses a procedural body while the canonical body-asset loading path is validated. Its only local write is its own tiny presentation-position preference file.
 
 ### Lychnos-owned memory
 
@@ -702,8 +707,8 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. validate and integrate the canonical Lychnos body asset into the working Wayland shell, replacing the temporary procedural body without changing the locked visual identity
-2. add lightweight floating/idle animation and safe shell ergonomics while keeping status/approval/alert rendering read-only
+1. restore/validate the canonical Lychnos body asset and integrate it into the working Wayland shell, replacing the temporary procedural body without changing the locked visual identity
+2. refine the compact/expanded shell presentation around that canonical body while preserving drag, remembered position, and read-only status rendering
 3. keep real Omarchy collectors, real resource sampling, AI-provider integration, and any host execution behind their later adapter/security boundaries
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.

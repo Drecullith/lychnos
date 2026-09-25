@@ -38,6 +38,15 @@ LYCHNOS_DEMO_STATE=normal cargo run --manifest-path prototypes/lychnos-shell/Car
 ```
 
 Supported demo states are `normal`, `game`, `disabled`, `approval`, and `alert`.
+
+## Prototype interaction
+
+- drag the Lychnos body to move the overlay;
+- the top/right position is remembered in `~/.config/lychnos/shell-position.conf` (or `$XDG_CONFIG_HOME/lychnos/shell-position.conf`);
+- double-click the body to hide/show the status card; and
+- the body has a lightweight idle float/pulse animation.
+
+The preference file stores only the two presentation offsets used by this prototype.
 The prototype uses `gtk4-layer-shell` to float at the top-right of the desktop without reserving screen space or taking keyboard focus.
 
 It currently renders:
@@ -46,6 +55,9 @@ It currently renders:
 - a read-only status card;
 - distinct Normal, Game Mode, and Disabled expressions/accents;
 - a pending-approval notification pip; and
-- a sample warning/alert message.
+- a sample warning/alert message;
+- drag-to-move ergonomics;
+- remembered presentation position; and
+- lightweight idle animation.
 
-No real system monitoring, provider call, approval action, or host execution is performed.
+No real system monitoring, provider call, approval action, or host execution is performed. The only local write performed by the prototype is its own small presentation-position preference file after dragging.

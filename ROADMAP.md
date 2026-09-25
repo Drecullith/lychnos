@@ -93,7 +93,7 @@ Likely work:
 - resource-budget instrumentation abstractions for later Game Mode testing (typed observations, explicit units, mode-specific budgets, mismatch handling, and in-memory observation log now implemented; real sampling remains deferred)
 - read-only presentation-state projection for an early visual-shell prototype without granting UI execution authority (implemented)
 - isolated Omarchy/Wayland desktop visual-shell prototype using GTK4 + layer shell, consuming presentation-domain state only (implemented with a temporary procedural body; canonical asset integration remains)
-- lightweight floating/idle animation and canonical body-asset integration for the visual prototype
+- lightweight floating/idle animation plus drag-to-move, remembered presentation position, and compact/expanded status-card ergonomics for the visual prototype (implemented); canonical body-asset integration remains
 
 This phase should make it possible to exercise Lychnos behavior end to end before granting it meaningful access to the host system.
 

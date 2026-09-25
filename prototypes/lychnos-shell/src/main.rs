@@ -1,5 +1,10 @@
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Box as GtkBox, DrawingArea, Label, Orientation};
+use std::{cell::Cell, fs, path::PathBuf, rc::Rc, time::Duration};
+
+use gtk::{
+    Application, ApplicationWindow, Box as GtkBox, DrawingArea, GestureClick, GestureDrag, Label,
+    Orientation,
+};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lychnos_core::{
     diagnostics::DiagnosticLevel,
@@ -10,6 +15,8 @@ use lychnos_core::{
 };
 
 const APP_ID: &str = "org.lychnos.prototype.shell";
+const DEFAULT_TOP_MARGIN: i32 = 36;
+const DEFAULT_RIGHT_MARGIN: i32 = 42;
 
 fn main() {
     let application = Application::builder().application_id(APP_ID).build();
@@ -43,29 +50,157 @@ fn build_ui(app: &Application) {
     window.set_exclusive_zone(0);
     window.set_anchor(Edge::Top, true);
     window.set_anchor(Edge::Right, true);
-    window.set_margin(Edge::Top, 36);
-    window.set_margin(Edge::Right, 42);
+
+    let (top_margin, right_margin) = load_shell_position();
+    window.set_margin(Edge::Top, top_margin);
+    window.set_margin(Edge::Right, right_margin);
+
+    install_shell_interactions(&window, &body, &status, top_margin, right_margin);
 
     window.present();
+}
+
+fn install_shell_interactions(
+    window: &ApplicationWindow,
+    body: &DrawingArea,
+    status: &GtkBox,
+    top_margin: i32,
+    right_margin: i32,
+) {
+    let current_top = Rc::new(Cell::new(top_margin));
+    let current_right = Rc::new(Cell::new(right_margin));
+    let drag_start_top = Rc::new(Cell::new(top_margin));
+    let drag_start_right = Rc::new(Cell::new(right_margin));
+
+    let drag = GestureDrag::new();
+
+    {
+        let current_top = Rc::clone(&current_top);
+        let current_right = Rc::clone(&current_right);
+        let drag_start_top = Rc::clone(&drag_start_top);
+        let drag_start_right = Rc::clone(&drag_start_right);
+
+        drag.connect_drag_begin(move |_, _, _| {
+            drag_start_top.set(current_top.get());
+            drag_start_right.set(current_right.get());
+        });
+    }
+
+    {
+        let window = window.clone();
+        let current_top = Rc::clone(&current_top);
+        let current_right = Rc::clone(&current_right);
+        let drag_start_top = Rc::clone(&drag_start_top);
+        let drag_start_right = Rc::clone(&drag_start_right);
+
+        drag.connect_drag_update(move |_, offset_x, offset_y| {
+            let top = (drag_start_top.get() + offset_y.round() as i32).max(0);
+            let right = (drag_start_right.get() - offset_x.round() as i32).max(0);
+
+            current_top.set(top);
+            current_right.set(right);
+            window.set_margin(Edge::Top, top);
+            window.set_margin(Edge::Right, right);
+        });
+    }
+
+    {
+        let current_top = Rc::clone(&current_top);
+        let current_right = Rc::clone(&current_right);
+
+        drag.connect_drag_end(move |_, _, _| {
+            save_shell_position(current_top.get(), current_right.get());
+        });
+    }
+
+    body.add_controller(drag);
+
+    let click = GestureClick::new();
+    {
+        let status = status.clone();
+        click.connect_released(move |_, press_count, _, _| {
+            if press_count == 2 {
+                status.set_visible(!status.is_visible());
+            }
+        });
+    }
+    body.add_controller(click);
+}
+
+fn shell_position_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(path).join("lychnos/shell-position.conf"));
+    }
+
+    std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".config/lychnos/shell-position.conf"))
+}
+
+fn load_shell_position() -> (i32, i32) {
+    let Some(path) = shell_position_path() else {
+        return (DEFAULT_TOP_MARGIN, DEFAULT_RIGHT_MARGIN);
+    };
+
+    let Ok(contents) = fs::read_to_string(path) else {
+        return (DEFAULT_TOP_MARGIN, DEFAULT_RIGHT_MARGIN);
+    };
+
+    let mut top = None;
+    let mut right = None;
+
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("top=") {
+            top = value.parse::<i32>().ok().filter(|value| *value >= 0);
+        } else if let Some(value) = line.strip_prefix("right=") {
+            right = value.parse::<i32>().ok().filter(|value| *value >= 0);
+        }
+    }
+
+    (
+        top.unwrap_or(DEFAULT_TOP_MARGIN),
+        right.unwrap_or(DEFAULT_RIGHT_MARGIN),
+    )
+}
+
+fn save_shell_position(top: i32, right: i32) {
+    let Some(path) = shell_position_path() else {
+        return;
+    };
+
+    let Some(parent) = path.parent() else {
+        return;
+    };
+
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+
+    let _ = fs::write(path, format!("top={top}\nright={right}\n"));
 }
 
 fn build_body(state: &CompanionPresentationState) -> DrawingArea {
     let area = DrawingArea::new();
     area.set_content_width(188);
     area.set_content_height(188);
-    area.set_tooltip_text(Some("Lychnos prototype — read-only projected state"));
+    area.set_tooltip_text(Some("Drag to move · double-click to hide/show status"));
 
     let mode = state.runtime_mode;
     let approvals = state.pending_approval_count();
+    let phase = Rc::new(Cell::new(0.0_f64));
+    let draw_phase = Rc::clone(&phase);
+
     area.set_draw_func(move |_, cr, width, height| {
         let w = f64::from(width);
         let h = f64::from(height);
         let cx = w / 2.0;
-        let cy = h / 2.0 - 4.0;
+        let bob = draw_phase.get().sin() * 4.5;
+        let pulse = (draw_phase.get() * 0.72).sin() * 0.04;
+        let cy = h / 2.0 - 4.0 + bob;
         let radius = w.min(h) * 0.34;
 
         // Soft floating shadow.
-        cr.set_source_rgba(0.0, 0.72, 0.92, 0.16);
+        cr.set_source_rgba(0.0, 0.72, 0.92, 0.16 + pulse);
         cr.arc(
             cx,
             cy + radius + 18.0,
@@ -135,6 +270,18 @@ fn build_body(state: &CompanionPresentationState) -> DrawingArea {
             );
             let _ = cr.fill();
         }
+    });
+
+    let animation_area = area.clone();
+    gtk::glib::timeout_add_local(Duration::from_millis(40), move || {
+        let next = phase.get() + 0.08;
+        phase.set(if next > std::f64::consts::TAU {
+            next - std::f64::consts::TAU
+        } else {
+            next
+        });
+        animation_area.queue_draw();
+        gtk::glib::ControlFlow::Continue
     });
 
     area
