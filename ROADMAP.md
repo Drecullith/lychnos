@@ -29,7 +29,7 @@ Key outputs include:
 
 ## Phase 1 — Machine-Independent Core Foundation
 
-Status: **Current / nearing completion**
+Status: **Complete**
 
 Goal:
 
@@ -69,7 +69,7 @@ Phase 1 exit criteria:
 
 ## Phase 2 — Local Simulator and Prototype Runtime
 
-Status: **Planned**
+Status: **Current**
 
 Goal:
 
@@ -80,7 +80,7 @@ Likely work:
 - richer deterministic collectors and scenarios
 - multi-event simulations
 - analyzer/provider interface design
-- explicit user-approval flow
+- explicit user-approval flow (first bound-grant slice implemented)
 - configuration consumption by the application runtime
 - diagnostics integration
 - persistent local development state where justified
