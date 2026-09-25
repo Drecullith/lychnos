@@ -93,6 +93,7 @@ fn install_shell_interactions(
     let current_right = Rc::new(Cell::new(right_margin));
     let drag_start_top = Rc::new(Cell::new(top_margin));
     let drag_start_right = Rc::new(Cell::new(right_margin));
+    let position_locked = Rc::new(Cell::new(false));
 
     let drag = GestureDrag::new();
 
@@ -102,9 +103,15 @@ fn install_shell_interactions(
         let drag_start_top = Rc::clone(&drag_start_top);
         let drag_start_right = Rc::clone(&drag_start_right);
         let dragging = Rc::clone(&dragging);
+        let position_locked = Rc::clone(&position_locked);
         let body = body.clone();
 
         drag.connect_drag_begin(move |_, _, _| {
+            if position_locked.get() {
+                dragging.set(false);
+                return;
+            }
+
             drag_start_top.set(current_top.get());
             drag_start_right.set(current_right.get());
             dragging.set(true);
@@ -118,8 +125,13 @@ fn install_shell_interactions(
         let current_right = Rc::clone(&current_right);
         let drag_start_top = Rc::clone(&drag_start_top);
         let drag_start_right = Rc::clone(&drag_start_right);
+        let position_locked = Rc::clone(&position_locked);
 
         drag.connect_drag_update(move |_, offset_x, offset_y| {
+            if position_locked.get() {
+                return;
+            }
+
             let requested_top = drag_start_top.get() + offset_y.round() as i32;
             let requested_right = drag_start_right.get() - offset_x.round() as i32;
             let (top, right) = clamp_shell_position(&window, requested_top, requested_right);
@@ -135,18 +147,23 @@ fn install_shell_interactions(
         let current_top = Rc::clone(&current_top);
         let current_right = Rc::clone(&current_right);
         let dragging = Rc::clone(&dragging);
+        let position_locked = Rc::clone(&position_locked);
         let body = body.clone();
 
         drag.connect_drag_end(move |_, _, _| {
             dragging.set(false);
             body.queue_draw();
-            save_shell_position(current_top.get(), current_right.get());
+
+            if !position_locked.get() {
+                save_shell_position(current_top.get(), current_right.get());
+            }
         });
     }
 
     body.add_controller(drag);
 
     let click = GestureClick::new();
+    click.set_button(1);
     {
         let status = status.clone();
         click.connect_released(move |_, press_count, _, _| {
@@ -156,6 +173,148 @@ fn install_shell_interactions(
         });
     }
     body.add_controller(click);
+
+    install_context_menu(
+        window,
+        body,
+        status,
+        Rc::clone(&current_top),
+        Rc::clone(&current_right),
+        Rc::clone(&position_locked),
+    );
+}
+
+fn install_context_menu(
+    window: &ApplicationWindow,
+    body: &DrawingArea,
+    status: &GtkBox,
+    current_top: Rc<Cell<i32>>,
+    current_right: Rc<Cell<i32>>,
+    position_locked: Rc<Cell<bool>>,
+) {
+    let popover = gtk::Popover::new();
+    popover.set_has_arrow(true);
+    popover.set_parent(body);
+    popover.add_css_class("lychnos-menu");
+
+    let menu = GtkBox::new(Orientation::Vertical, 3);
+    menu.add_css_class("lychnos-menu-box");
+
+    let ghost_button = gtk::Button::with_label("See-through");
+    ghost_button.add_css_class("lychnos-menu-item");
+    let status_button = gtk::Button::with_label(if status.is_visible() {
+        "Hide status"
+    } else {
+        "Show status"
+    });
+    status_button.add_css_class("lychnos-menu-item");
+    let lock_button = gtk::Button::with_label("Lock position");
+    lock_button.add_css_class("lychnos-menu-item");
+    let reset_button = gtk::Button::with_label("Reset position");
+    reset_button.add_css_class("lychnos-menu-item");
+    let close_button = gtk::Button::with_label("Close Lychnos");
+    close_button.add_css_class("lychnos-menu-item");
+    close_button.add_css_class("destructive-action");
+
+    menu.append(&ghost_button);
+    menu.append(&status_button);
+    menu.append(&lock_button);
+    menu.append(&gtk::Separator::new(Orientation::Horizontal));
+    menu.append(&reset_button);
+    menu.append(&gtk::Separator::new(Orientation::Horizontal));
+    menu.append(&close_button);
+    popover.set_child(Some(&menu));
+
+    let ghosted = Rc::new(Cell::new(false));
+    {
+        let ghosted = Rc::clone(&ghosted);
+        let body = body.clone();
+        let status = status.clone();
+        let popover = popover.clone();
+
+        ghost_button.connect_clicked(move |button| {
+            let next = !ghosted.get();
+            ghosted.set(next);
+            let opacity = if next { 0.28 } else { 1.0 };
+            body.set_opacity(opacity);
+            status.set_opacity(opacity);
+            button.set_label(if next {
+                "Normal opacity"
+            } else {
+                "See-through"
+            });
+            popover.popdown();
+        });
+    }
+
+    {
+        let status = status.clone();
+        let popover = popover.clone();
+
+        status_button.connect_clicked(move |button| {
+            let visible = !status.is_visible();
+            status.set_visible(visible);
+            button.set_label(if visible {
+                "Hide status"
+            } else {
+                "Show status"
+            });
+            popover.popdown();
+        });
+    }
+
+    {
+        let position_locked = Rc::clone(&position_locked);
+        let popover = popover.clone();
+
+        lock_button.connect_clicked(move |button| {
+            let locked = !position_locked.get();
+            position_locked.set(locked);
+            button.set_label(if locked {
+                "Unlock position"
+            } else {
+                "Lock position"
+            });
+            popover.popdown();
+        });
+    }
+
+    {
+        let window = window.clone();
+        let current_top = Rc::clone(&current_top);
+        let current_right = Rc::clone(&current_right);
+        let popover = popover.clone();
+
+        reset_button.connect_clicked(move |_| {
+            current_top.set(DEFAULT_TOP_MARGIN);
+            current_right.set(DEFAULT_RIGHT_MARGIN);
+            window.set_margin(Edge::Top, DEFAULT_TOP_MARGIN);
+            window.set_margin(Edge::Right, DEFAULT_RIGHT_MARGIN);
+            save_shell_position(DEFAULT_TOP_MARGIN, DEFAULT_RIGHT_MARGIN);
+            popover.popdown();
+        });
+    }
+
+    {
+        let window = window.clone();
+
+        close_button.connect_clicked(move |_| {
+            window.close();
+        });
+    }
+
+    let context_click = GestureClick::new();
+    context_click.set_button(3);
+    {
+        let popover = popover.clone();
+
+        context_click.connect_pressed(move |_, _, x, y| {
+            let rect = gtk::gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+            popover.set_pointing_to(Some(&rect));
+            popover.popup();
+        });
+    }
+    body.add_controller(context_click);
 }
 
 fn clamp_shell_position(window: &ApplicationWindow, top: i32, right: i32) -> (i32, i32) {
@@ -237,7 +396,9 @@ fn build_body(
     let area = DrawingArea::new();
     area.set_content_width(210);
     area.set_content_height(210);
-    area.set_tooltip_text(Some("Drag to move · double-click to hide/show status"));
+    area.set_tooltip_text(Some(
+        "Drag to move · double-click status · right-click options",
+    ));
 
     let asset_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/canon/lychnos-body-v1.png");
@@ -538,6 +699,17 @@ fn install_css() {
         .detail-label {
             color: rgba(225, 244, 248, 0.74);
             font-size: 10px;
+        }
+        .lychnos-menu > contents {
+            background: rgba(8, 15, 20, 0.97);
+            border: 1px solid rgba(51, 210, 255, 0.30);
+            border-radius: 12px;
+            padding: 6px;
+        }
+        .lychnos-menu-item {
+            min-width: 148px;
+            padding: 7px 10px;
+            border-radius: 8px;
         }
         "#,
     );
