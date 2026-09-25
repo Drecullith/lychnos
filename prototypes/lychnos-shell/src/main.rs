@@ -1,3 +1,4 @@
+use gtk::gdk::prelude::GdkCairoContextExt;
 use gtk::prelude::*;
 use std::{cell::Cell, fs, path::PathBuf, rc::Rc, time::Duration};
 
@@ -18,6 +19,17 @@ const APP_ID: &str = "org.lychnos.prototype.shell";
 const DEFAULT_TOP_MARGIN: i32 = 36;
 const DEFAULT_RIGHT_MARGIN: i32 = 42;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompanionExpression {
+    Neutral,
+    Happy,
+    Thinking,
+    Excited,
+    Focused,
+    Listening,
+    Speaking,
+}
+
 fn main() {
     let application = Application::builder().application_id(APP_ID).build();
     application.connect_activate(build_ui);
@@ -28,7 +40,9 @@ fn build_ui(app: &Application) {
     install_css();
 
     let state = demo_state_from_args();
-    let body = build_body(&state);
+    let expression = demo_expression_from_env();
+    let dragging = Rc::new(Cell::new(false));
+    let body = build_body(&state, expression, Rc::clone(&dragging));
     let status = build_status_card(&state);
 
     let layout = GtkBox::new(Orientation::Vertical, 8);
@@ -55,7 +69,14 @@ fn build_ui(app: &Application) {
     window.set_margin(Edge::Top, top_margin);
     window.set_margin(Edge::Right, right_margin);
 
-    install_shell_interactions(&window, &body, &status, top_margin, right_margin);
+    install_shell_interactions(
+        &window,
+        &body,
+        &status,
+        top_margin,
+        right_margin,
+        Rc::clone(&dragging),
+    );
 
     window.present();
 }
@@ -66,6 +87,7 @@ fn install_shell_interactions(
     status: &GtkBox,
     top_margin: i32,
     right_margin: i32,
+    dragging: Rc<Cell<bool>>,
 ) {
     let current_top = Rc::new(Cell::new(top_margin));
     let current_right = Rc::new(Cell::new(right_margin));
@@ -79,10 +101,14 @@ fn install_shell_interactions(
         let current_right = Rc::clone(&current_right);
         let drag_start_top = Rc::clone(&drag_start_top);
         let drag_start_right = Rc::clone(&drag_start_right);
+        let dragging = Rc::clone(&dragging);
+        let body = body.clone();
 
         drag.connect_drag_begin(move |_, _, _| {
             drag_start_top.set(current_top.get());
             drag_start_right.set(current_right.get());
+            dragging.set(true);
+            body.queue_draw();
         });
     }
 
@@ -94,8 +120,9 @@ fn install_shell_interactions(
         let drag_start_right = Rc::clone(&drag_start_right);
 
         drag.connect_drag_update(move |_, offset_x, offset_y| {
-            let top = (drag_start_top.get() + offset_y.round() as i32).max(0);
-            let right = (drag_start_right.get() - offset_x.round() as i32).max(0);
+            let requested_top = drag_start_top.get() + offset_y.round() as i32;
+            let requested_right = drag_start_right.get() - offset_x.round() as i32;
+            let (top, right) = clamp_shell_position(&window, requested_top, requested_right);
 
             current_top.set(top);
             current_right.set(right);
@@ -107,8 +134,12 @@ fn install_shell_interactions(
     {
         let current_top = Rc::clone(&current_top);
         let current_right = Rc::clone(&current_right);
+        let dragging = Rc::clone(&dragging);
+        let body = body.clone();
 
         drag.connect_drag_end(move |_, _, _| {
+            dragging.set(false);
+            body.queue_draw();
             save_shell_position(current_top.get(), current_right.get());
         });
     }
@@ -125,6 +156,25 @@ fn install_shell_interactions(
         });
     }
     body.add_controller(click);
+}
+
+fn clamp_shell_position(window: &ApplicationWindow, top: i32, right: i32) -> (i32, i32) {
+    let Some(surface) = window.surface() else {
+        return (top.max(0), right.max(0));
+    };
+
+    let display = gtk::prelude::WidgetExt::display(window);
+    let Some(monitor) = display.monitor_at_surface(&surface) else {
+        return (top.max(0), right.max(0));
+    };
+
+    let geometry = monitor.geometry();
+    let window_width = window.width().max(1);
+    let window_height = window.height().max(1);
+    let max_right = (geometry.width() - window_width).max(0);
+    let max_top = (geometry.height() - window_height).max(0);
+
+    (top.clamp(0, max_top), right.clamp(0, max_right))
 }
 
 fn shell_position_path() -> Option<PathBuf> {
@@ -179,126 +229,202 @@ fn save_shell_position(top: i32, right: i32) {
     let _ = fs::write(path, format!("top={top}\nright={right}\n"));
 }
 
-fn build_body(state: &CompanionPresentationState) -> DrawingArea {
+fn build_body(
+    state: &CompanionPresentationState,
+    expression: CompanionExpression,
+    dragging: Rc<Cell<bool>>,
+) -> DrawingArea {
     let area = DrawingArea::new();
     area.set_content_width(210);
     area.set_content_height(210);
     area.set_tooltip_text(Some("Drag to move · double-click to hide/show status"));
+
+    let asset_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/canon/lychnos-body-v1.png");
+    let pixbuf =
+        gtk::gdk_pixbuf::Pixbuf::from_file(asset_path).expect("canonical Lychnos PNG should load");
+    let pixbuf = pixbuf
+        .scale_simple(164, 164, gtk::gdk_pixbuf::InterpType::Bilinear)
+        .expect("canonical Lychnos PNG should scale");
 
     let mode = state.runtime_mode;
     let approvals = state.pending_approval_count();
     let alert = state.latest_diagnostic.is_some();
     let phase = Rc::new(Cell::new(0.0_f64));
     let draw_phase = Rc::clone(&phase);
+    let draw_dragging = Rc::clone(&dragging);
 
     area.set_draw_func(move |_, cr, width, height| {
         let w = f64::from(width);
         let h = f64::from(height);
         let cx = w / 2.0;
-        let bob = draw_phase.get().sin() * 4.5;
-        let pulse = (draw_phase.get() * 0.72).sin() * 0.05;
-        let cy = h / 2.0 - 9.0 + bob;
-        let shell_radius = w.min(h) * 0.31;
-        let face_radius = shell_radius * 0.69;
+        let bob = if draw_dragging.get() {
+            0.0
+        } else {
+            draw_phase.get().sin() * 4.0
+        };
+        let body_x = cx - 82.0;
+        let body_y = h / 2.0 - 82.0 - 8.0 + bob;
+        let cy = body_y + 82.0;
+        let pulse = (draw_phase.get() * 0.72).sin() * 0.06;
         let (r, g, b) = mode_accent(mode, alert);
 
-        // Canonical hover ring.
-        draw_ellipse(
-            cr,
-            cx,
-            cy + shell_radius + 25.0,
-            shell_radius * 0.72,
-            8.5,
-            (r, g, b, 0.17 + pulse),
-            0.0,
-        );
-        draw_ellipse(
-            cr,
-            cx,
-            cy + shell_radius + 25.0,
-            shell_radius * 0.62,
-            5.0,
-            (r, g, b, 0.46 + pulse),
-            1.8,
-        );
+        cr.set_source_pixbuf(&pixbuf, body_x, body_y);
+        let _ = cr.paint();
 
-        // Six armor petals around the glossy face, echoing the locked Lychnos body.
-        for angle in [-1.57_f64, -0.53, 0.52, 1.57, 2.62, 3.67] {
-            draw_shell_petal(cr, cx, cy, shell_radius, angle, (r, g, b), 0.70 + pulse);
+        draw_expression(cr, cx, cy, expression, draw_phase.get());
+
+        if alert || !matches!(mode, RuntimeMode::Normal) {
+            cr.set_source_rgba(r, g, b, 0.20 + pulse);
+            cr.set_line_width(3.0);
+            cr.arc(cx, cy - 2.0, 75.0, 0.0, std::f64::consts::TAU);
+            let _ = cr.stroke();
         }
 
-        // Inner structural ring.
-        cr.set_source_rgba(0.035, 0.055, 0.072, 0.98);
-        cr.arc(cx, cy, shell_radius * 0.80, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
-
-        cr.set_source_rgba(r, g, b, 0.18);
-        cr.set_line_width(2.0);
-        cr.arc(cx, cy, shell_radius * 0.79, -2.85, -0.30);
-        let _ = cr.stroke();
-
-        // Glossy black face disc.
-        let face_gradient = gtk::cairo::RadialGradient::new(
-            cx - face_radius * 0.24,
-            cy - face_radius * 0.28,
-            face_radius * 0.08,
-            cx,
-            cy,
-            face_radius,
-        );
-        face_gradient.add_color_stop_rgb(0.0, 0.075, 0.095, 0.11);
-        face_gradient.add_color_stop_rgb(0.48, 0.018, 0.025, 0.034);
-        face_gradient.add_color_stop_rgb(1.0, 0.002, 0.005, 0.009);
-        let _ = cr.set_source(&face_gradient);
-        cr.arc(cx, cy, face_radius, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
-
-        // Glass highlight.
-        cr.set_source_rgba(0.55, 0.78, 0.92, 0.11);
-        cr.set_line_width(4.0);
-        cr.arc(cx - 3.0, cy - 2.0, face_radius - 5.0, 3.55, 5.08);
-        let _ = cr.stroke();
-
-        draw_face_expression(cr, cx, cy, mode, alert, (r, g, b));
-
-        // Approval notification pip.
         if approvals > 0 {
             cr.set_source_rgba(1.0, 0.56, 0.16, 0.98);
-            cr.arc(
-                cx + shell_radius * 0.78,
-                cy - shell_radius * 0.68,
-                8.0,
-                0.0,
-                std::f64::consts::TAU,
-            );
+            cr.arc(cx + 54.0, cy - 53.0, 8.0, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
 
             cr.set_source_rgba(1.0, 0.78, 0.38, 0.36);
             cr.set_line_width(4.0);
-            cr.arc(
-                cx + shell_radius * 0.78,
-                cy - shell_radius * 0.68,
-                11.0,
-                0.0,
-                std::f64::consts::TAU,
-            );
+            cr.arc(cx + 54.0, cy - 53.0, 11.0, 0.0, std::f64::consts::TAU);
             let _ = cr.stroke();
         }
     });
 
     let animation_area = area.clone();
-    gtk::glib::timeout_add_local(Duration::from_millis(40), move || {
-        let next = phase.get() + 0.08;
-        phase.set(if next > std::f64::consts::TAU {
-            next - std::f64::consts::TAU
-        } else {
-            next
-        });
-        animation_area.queue_draw();
+    let animation_dragging = Rc::clone(&dragging);
+    gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+        if !animation_dragging.get() {
+            let next = phase.get() + 0.09;
+            phase.set(if next > std::f64::consts::TAU {
+                next - std::f64::consts::TAU
+            } else {
+                next
+            });
+            animation_area.queue_draw();
+        }
         gtk::glib::ControlFlow::Continue
     });
 
     area
+}
+
+fn draw_expression(
+    cr: &gtk::cairo::Context,
+    cx: f64,
+    cy: f64,
+    expression: CompanionExpression,
+    phase: f64,
+) {
+    // The current canonical PNG has a baked-in happy face. Mask only the central
+    // glass face region, then render state-driven expressions on top.
+    cr.set_source_rgba(0.005, 0.008, 0.014, 0.97);
+    cr.arc(cx, cy - 5.0, 43.0, 0.0, std::f64::consts::TAU);
+    let _ = cr.fill();
+
+    let glow = 0.88 + (phase * 0.9).sin() * 0.06;
+    cr.set_source_rgba(0.19, 0.90, 1.0, glow);
+    cr.set_line_width(4.2);
+    cr.set_line_cap(gtk::cairo::LineCap::Round);
+
+    match expression {
+        CompanionExpression::Neutral => {
+            draw_eye_circle(cr, cx - 17.0, cy - 9.0, 6.0);
+            draw_eye_circle(cr, cx + 17.0, cy - 9.0, 6.0);
+        }
+        CompanionExpression::Happy => {
+            draw_happy_eye(cr, cx - 17.0, cy - 7.0);
+            draw_happy_eye(cr, cx + 17.0, cy - 7.0);
+            cr.move_to(cx - 11.0, cy + 15.0);
+            cr.curve_to(
+                cx - 4.0,
+                cy + 20.0,
+                cx + 4.0,
+                cy + 20.0,
+                cx + 11.0,
+                cy + 15.0,
+            );
+            let _ = cr.stroke();
+        }
+        CompanionExpression::Thinking => {
+            cr.move_to(cx - 24.0, cy - 8.0);
+            cr.line_to(cx - 10.0, cy - 8.0);
+            cr.move_to(cx + 10.0, cy - 8.0);
+            cr.line_to(cx + 24.0, cy - 8.0);
+            let _ = cr.stroke();
+            cr.arc(cx + 24.0, cy + 8.0, 2.8, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+        }
+        CompanionExpression::Excited => {
+            draw_happy_eye(cr, cx - 18.0, cy - 8.0);
+            draw_happy_eye(cr, cx + 18.0, cy - 8.0);
+            cr.move_to(cx - 12.0, cy + 14.0);
+            cr.curve_to(
+                cx - 4.0,
+                cy + 22.0,
+                cx + 4.0,
+                cy + 22.0,
+                cx + 12.0,
+                cy + 14.0,
+            );
+            let _ = cr.stroke();
+        }
+        CompanionExpression::Focused => {
+            cr.move_to(cx - 25.0, cy - 14.0);
+            cr.line_to(cx - 11.0, cy - 8.0);
+            cr.move_to(cx + 25.0, cy - 14.0);
+            cr.line_to(cx + 11.0, cy - 8.0);
+            let _ = cr.stroke();
+        }
+        CompanionExpression::Listening => {
+            draw_eye_circle(cr, cx - 17.0, cy - 9.0, 6.0);
+            draw_eye_circle(cr, cx + 17.0, cy - 9.0, 6.0);
+            let radius = 4.0 + ((phase * 1.8).sin() + 1.0) * 1.2;
+            cr.arc(cx + 1.0, cy + 15.0, radius, 0.0, std::f64::consts::TAU);
+            let _ = cr.stroke();
+        }
+        CompanionExpression::Speaking => {
+            draw_happy_eye(cr, cx - 17.0, cy - 8.0);
+            draw_happy_eye(cr, cx + 17.0, cy - 8.0);
+            let mouth = 5.0 + ((phase * 2.4).sin() + 1.0) * 3.0;
+            cr.arc(cx, cy + 14.0, mouth, 0.15, std::f64::consts::PI - 0.15);
+            let _ = cr.stroke();
+        }
+    }
+}
+
+fn draw_eye_circle(cr: &gtk::cairo::Context, x: f64, y: f64, radius: f64) {
+    cr.arc(x, y, radius, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+}
+
+fn draw_happy_eye(cr: &gtk::cairo::Context, x: f64, y: f64) {
+    cr.arc(
+        x,
+        y + 5.0,
+        8.0,
+        std::f64::consts::PI + 0.35,
+        std::f64::consts::TAU - 0.35,
+    );
+    let _ = cr.stroke();
+}
+
+fn demo_expression_from_env() -> CompanionExpression {
+    match std::env::var("LYCHNOS_DEMO_STATE")
+        .unwrap_or_else(|_| "normal".into())
+        .as_str()
+    {
+        "neutral" => CompanionExpression::Neutral,
+        "thinking" => CompanionExpression::Thinking,
+        "excited" => CompanionExpression::Excited,
+        "focused" | "alert" | "game" | "gamemode" => CompanionExpression::Focused,
+        "listening" | "approval" => CompanionExpression::Listening,
+        "speaking" => CompanionExpression::Speaking,
+        "disabled" => CompanionExpression::Neutral,
+        _ => CompanionExpression::Happy,
+    }
 }
 
 fn build_status_card(state: &CompanionPresentationState) -> GtkBox {
@@ -384,161 +510,6 @@ fn mode_label(mode: RuntimeMode) -> &'static str {
         RuntimeMode::Normal => "NORMAL · AWAKE",
         RuntimeMode::GameMode => "GAME MODE · QUIET",
         RuntimeMode::Disabled => "DISABLED · SAFE",
-    }
-}
-
-fn draw_shell_petal(
-    cr: &gtk::cairo::Context,
-    cx: f64,
-    cy: f64,
-    shell_radius: f64,
-    angle: f64,
-    accent: (f64, f64, f64),
-    glow_alpha: f64,
-) {
-    let radial = shell_radius * 0.80;
-    let px = cx + angle.cos() * radial;
-    let py = cy + angle.sin() * radial;
-    let petal_radius = shell_radius * 0.43;
-    let (r, g, b) = accent;
-
-    if cr.save().is_err() {
-        return;
-    }
-
-    cr.translate(px, py);
-    cr.rotate(angle + std::f64::consts::FRAC_PI_2);
-    cr.scale(1.0, 0.52);
-
-    let gradient =
-        gtk::cairo::LinearGradient::new(-petal_radius, -petal_radius, petal_radius, petal_radius);
-    gradient.add_color_stop_rgb(0.0, 0.15, 0.18, 0.23);
-    gradient.add_color_stop_rgb(0.42, 0.07, 0.09, 0.12);
-    gradient.add_color_stop_rgb(1.0, 0.018, 0.026, 0.035);
-    let _ = cr.set_source(&gradient);
-    cr.arc(0.0, 0.0, petal_radius, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
-
-    cr.set_source_rgba(0.32, 0.42, 0.52, 0.54);
-    cr.set_line_width(2.4);
-    cr.arc(0.0, 0.0, petal_radius - 1.4, 0.0, std::f64::consts::TAU);
-    let _ = cr.stroke();
-
-    cr.set_source_rgba(r, g, b, glow_alpha.clamp(0.0, 1.0));
-    cr.set_line_width(3.4);
-    cr.arc(0.0, 0.0, petal_radius - 4.0, -2.35, -0.42);
-    let _ = cr.stroke();
-
-    let _ = cr.restore();
-}
-
-fn draw_ellipse(
-    cr: &gtk::cairo::Context,
-    cx: f64,
-    cy: f64,
-    rx: f64,
-    ry: f64,
-    rgba: (f64, f64, f64, f64),
-    line_width: f64,
-) {
-    if cr.save().is_err() {
-        return;
-    }
-
-    cr.translate(cx, cy);
-    cr.scale(rx, ry);
-    cr.arc(0.0, 0.0, 1.0, 0.0, std::f64::consts::TAU);
-    let _ = cr.restore();
-
-    cr.set_source_rgba(rgba.0, rgba.1, rgba.2, rgba.3.clamp(0.0, 1.0));
-    if line_width > 0.0 {
-        cr.set_line_width(line_width);
-        let _ = cr.stroke();
-    } else {
-        let _ = cr.fill();
-    }
-}
-
-fn draw_face_expression(
-    cr: &gtk::cairo::Context,
-    cx: f64,
-    cy: f64,
-    mode: RuntimeMode,
-    alert: bool,
-    accent: (f64, f64, f64),
-) {
-    let (r, g, b) = accent;
-    cr.set_source_rgb(r, g, b);
-    cr.set_line_cap(gtk::cairo::LineCap::Round);
-    cr.set_line_width(5.4);
-
-    if alert {
-        cr.move_to(cx - 28.0, cy - 10.0);
-        cr.line_to(cx - 12.0, cy - 4.0);
-        let _ = cr.stroke();
-
-        cr.move_to(cx + 12.0, cy - 4.0);
-        cr.line_to(cx + 28.0, cy - 10.0);
-        let _ = cr.stroke();
-        return;
-    }
-
-    match mode {
-        RuntimeMode::Normal => {
-            cr.move_to(cx - 29.0, cy - 4.0);
-            cr.curve_to(
-                cx - 25.0,
-                cy - 16.0,
-                cx - 13.0,
-                cy - 16.0,
-                cx - 9.0,
-                cy - 4.0,
-            );
-            let _ = cr.stroke();
-
-            cr.move_to(cx + 9.0, cy - 4.0);
-            cr.curve_to(
-                cx + 13.0,
-                cy - 16.0,
-                cx + 25.0,
-                cy - 16.0,
-                cx + 29.0,
-                cy - 4.0,
-            );
-            let _ = cr.stroke();
-
-            cr.set_line_width(2.6);
-            cr.move_to(cx - 8.0, cy + 16.0);
-            cr.curve_to(
-                cx - 3.0,
-                cy + 20.0,
-                cx + 3.0,
-                cy + 20.0,
-                cx + 8.0,
-                cy + 16.0,
-            );
-            let _ = cr.stroke();
-        }
-        RuntimeMode::GameMode => {
-            cr.move_to(cx - 27.0, cy - 2.0);
-            cr.line_to(cx - 11.0, cy - 2.0);
-            let _ = cr.stroke();
-
-            cr.move_to(cx + 11.0, cy - 2.0);
-            cr.line_to(cx + 27.0, cy - 2.0);
-            let _ = cr.stroke();
-        }
-        RuntimeMode::Disabled => {
-            cr.set_source_rgba(r, g, b, 0.62);
-            cr.set_line_width(4.0);
-            cr.move_to(cx - 24.0, cy - 1.0);
-            cr.line_to(cx - 14.0, cy - 1.0);
-            let _ = cr.stroke();
-
-            cr.move_to(cx + 14.0, cy - 1.0);
-            cr.line_to(cx + 24.0, cy - 1.0);
-            let _ = cr.stroke();
-        }
     }
 }
 
