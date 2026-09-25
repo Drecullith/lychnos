@@ -82,7 +82,12 @@ Implemented:
 - `FoundationRuntime::collect_once(...)`
 - separate collector and runtime failures through `CollectorCycleError<E>`
 - end-to-end collector -> runtime -> analyzer -> safety -> permission -> audit tests
-- proof that Disabled mode blocks collector-sourced actions
+- runtime-aware collector suppression before polling
+- Game Mode does not poll collectors
+- Disabled mode does not poll collectors
+- queued collector events remain pending while background work is suppressed
+- explicit re-enable to Normal resumes collection
+- live action safety still applies to already-normalized events entering through the direct runtime boundary
 
 The collector abstraction is machine-independent. Real terminal, journal, systemd, hardware, and Omarchy-specific collectors are still intentionally deferred.
 
@@ -299,7 +304,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-66
+68
 ```
 
 Current quality gate:
@@ -337,6 +342,7 @@ Accepted ADRs currently cover:
 0015 Audited runtime mode transitions
 0016 Configuration loading boundary
 0017 Collector boundary and foundation pipeline
+0018 Runtime-aware collector suppression
 ```
 
 ## Intentionally Mocked
@@ -421,8 +427,9 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. expand canonical project documentation
-2. review Phase 1 boundaries for anything still missing before real Omarchy integration
+1. resolve the security-audit versus diagnostic-logging configuration boundary
+2. expand canonical project documentation
+3. perform the final Phase 1 boundary and quality review before real Omarchy integration
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
