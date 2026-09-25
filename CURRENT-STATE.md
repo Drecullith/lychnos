@@ -149,6 +149,14 @@ Implemented:
 - immediate transition to Disabled
 - Disabled fails closed
 - explicit re-enable operation
+- machine-independent work-start leases for already-started work
+- new work leases are issued only in Normal mode
+- each successful transition into Disabled advances a disable generation
+- work that started before a Disabled transition observes cancellation requested
+- explicit re-enable to Normal does not revive leases invalidated by an earlier Disabled transition
+- work started after re-enable receives a fresh uncancelled lease
+
+Game Mode continues to block new actions and non-essential background work, but cancellation/pause semantics for work that was already running when Game Mode begins remain intentionally undecided.
 
 ### Audited runtime-mode transitions
 
@@ -174,6 +182,9 @@ Implemented:
 - `WouldExecute`
 - `AwaitingUserApproval`
 - `Blocked`
+- simulation-only `MockRunningWork` representation for already-started work
+- observable running-work states `Running` and `CancellationRequested`
+- Disabled-mode cancellation is modeled without shell commands, process control, file writes, or other host effects
 
 ### Bound action approval flow
 
@@ -246,7 +257,9 @@ Implemented:
 - explicit user rejection remains semantically and audibly separate from system cancellation
 - entering Disabled does not automatically cancel all pending proposals; blocked approval attempts still retain pending state for later retry
 
-System cancellation currently applies only to pending actions. Cancellation of already-running work remains a separate future boundary.
+Pending-action cancellation remains separate from cancellation of already-started work.
+
+Already-started work now has a separate machine-independent cancellation-lease boundary: entering Disabled permanently invalidates leases issued before that transition, and later re-enabling Normal does not resurrect the old work. This is still a cancellation request only; real executor acknowledgement, process/task termination, completion state, timeout handling, and rollback semantics are not implemented.
 
 ### Security audit model
 
@@ -464,7 +477,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-110
+117
 ```
 
 Current quality gate:
@@ -513,6 +526,7 @@ Accepted ADRs currently cover:
 0026 Deterministic multi-step scenarios
 0027 System-driven pending action cancellation
 0028 Pending action lifecycle scenarios
+0029 Disabled-mode cancellation leases for running work
 ```
 
 ## Intentionally Mocked
@@ -551,6 +565,8 @@ Lychnos does **not** currently have:
 - persistent audit storage
 - portable-device synchronization
 - automatic Game Mode detection
+- Game Mode policy for already-running work
+- running-work cancellation acknowledgement/completion contract
 - gaming/streaming coexistence measurements
 - anti-cheat coexistence testing
 
@@ -565,6 +581,8 @@ There is no direct model-to-shell path.
 Runtime safety is checked at the permission and mock-execution boundary.
 
 A future real executor must re-check runtime state immediately before actual execution.
+
+Disabled now also exposes a latched cancellation request to work that already began under an older runtime generation. This does not yet mean cancellation has completed, that an operating-system task has stopped, or that prior side effects were rolled back.
 
 ## Open Architectural Decisions
 
@@ -597,9 +615,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. define cancellation semantics for already-running work before any real executor exists
-2. continue strengthening prototype lifecycle and failure behavior before real adapters
-3. identify the next machine-independent boundary needed before Phase 3 host integration
+1. define the running-work completion/acknowledgement contract so cancellation requested is clearly distinct from cancellation confirmed, completed, or non-cancellable work
+2. decide Game Mode semantics for work that is already running without weakening the harder Disabled boundary
+3. continue strengthening prototype lifecycle and failure behavior before real adapters, then identify the next machine-independent boundary needed before Phase 3 host integration
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
