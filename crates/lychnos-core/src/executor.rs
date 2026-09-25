@@ -54,8 +54,39 @@ impl MockExecutionOutcome {
 /// Observable state of one already-started mock operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockRunningWorkState {
+    /// Work is active and no cancellation has been requested.
     Running,
+    /// Disabled-mode safety requested cooperative cancellation, but the
+    /// simulated executor has not confirmed that work stopped.
     CancellationRequested,
+    /// The simulated executor reported that the running work cannot honor the
+    /// cancellation request and is still active.
+    CancellationUnavailable,
+    /// Work reached normal completion.
+    Completed,
+    /// The simulated executor confirmed that work stopped because of the
+    /// cancellation request.
+    StoppedAfterCancellation,
+}
+
+/// Invalid simulated running-work lifecycle transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockRunningWorkTransitionError {
+    /// A cancellation-specific transition was requested before runtime safety
+    /// requested cancellation.
+    CancellationNotRequested,
+    /// Work already reached a terminal state.
+    AlreadyTerminal,
+    /// The executor previously reported that cancellation cannot be honored.
+    CancellationUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MockRunningWorkLifecycle {
+    Active,
+    CancellationUnavailable,
+    Completed,
+    StoppedAfterCancellation,
 }
 
 /// Simulation-only representation of action work that has already started.
@@ -66,6 +97,7 @@ pub enum MockRunningWorkState {
 pub struct MockRunningWork {
     action_id: ActionId,
     lease: RuntimeWorkLease,
+    lifecycle: MockRunningWorkLifecycle,
 }
 
 impl MockRunningWork {
@@ -78,7 +110,11 @@ impl MockRunningWork {
     /// exists.
     #[must_use]
     pub fn new(action_id: ActionId, lease: RuntimeWorkLease) -> Self {
-        Self { action_id, lease }
+        Self {
+            action_id,
+            lease,
+            lifecycle: MockRunningWorkLifecycle::Active,
+        }
     }
 
     /// Returns the associated action identifier.
@@ -88,12 +124,89 @@ impl MockRunningWork {
     }
 
     /// Returns the current simulated running-work state.
+    ///
+    /// A runtime cancellation request is observable immediately, but it does
+    /// not become a confirmed stop until the simulated executor explicitly
+    /// acknowledges it.
     #[must_use]
     pub fn state(&self) -> MockRunningWorkState {
-        if self.lease.cancellation_requested() {
-            MockRunningWorkState::CancellationRequested
-        } else {
-            MockRunningWorkState::Running
+        match self.lifecycle {
+            MockRunningWorkLifecycle::Active => {
+                if self.lease.cancellation_requested() {
+                    MockRunningWorkState::CancellationRequested
+                } else {
+                    MockRunningWorkState::Running
+                }
+            }
+            MockRunningWorkLifecycle::CancellationUnavailable => {
+                MockRunningWorkState::CancellationUnavailable
+            }
+            MockRunningWorkLifecycle::Completed => MockRunningWorkState::Completed,
+            MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                MockRunningWorkState::StoppedAfterCancellation
+            }
+        }
+    }
+
+    /// Marks the simulated work as normally completed.
+    ///
+    /// Normal completion is allowed even after cancellation was requested,
+    /// modelling the race where work finishes before cooperative cancellation
+    /// can take effect.
+    pub fn complete(&mut self) -> Result<(), MockRunningWorkTransitionError> {
+        match self.lifecycle {
+            MockRunningWorkLifecycle::Active
+            | MockRunningWorkLifecycle::CancellationUnavailable => {
+                self.lifecycle = MockRunningWorkLifecycle::Completed;
+                Ok(())
+            }
+            MockRunningWorkLifecycle::Completed
+            | MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                Err(MockRunningWorkTransitionError::AlreadyTerminal)
+            }
+        }
+    }
+
+    /// Confirms that the simulated executor stopped work because cancellation
+    /// had been requested.
+    ///
+    /// Merely entering Disabled never calls this automatically: the runtime
+    /// requests cancellation, while the executor owns acknowledgement.
+    pub fn confirm_cancellation(&mut self) -> Result<(), MockRunningWorkTransitionError> {
+        match self.lifecycle {
+            MockRunningWorkLifecycle::Active if self.lease.cancellation_requested() => {
+                self.lifecycle = MockRunningWorkLifecycle::StoppedAfterCancellation;
+                Ok(())
+            }
+            MockRunningWorkLifecycle::Active => {
+                Err(MockRunningWorkTransitionError::CancellationNotRequested)
+            }
+            MockRunningWorkLifecycle::CancellationUnavailable => {
+                Err(MockRunningWorkTransitionError::CancellationUnavailable)
+            }
+            MockRunningWorkLifecycle::Completed
+            | MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                Err(MockRunningWorkTransitionError::AlreadyTerminal)
+            }
+        }
+    }
+
+    /// Records that the simulated executor cannot honor the current
+    /// cancellation request while work remains active.
+    pub fn mark_cancellation_unavailable(&mut self) -> Result<(), MockRunningWorkTransitionError> {
+        match self.lifecycle {
+            MockRunningWorkLifecycle::Active if self.lease.cancellation_requested() => {
+                self.lifecycle = MockRunningWorkLifecycle::CancellationUnavailable;
+                Ok(())
+            }
+            MockRunningWorkLifecycle::Active => {
+                Err(MockRunningWorkTransitionError::CancellationNotRequested)
+            }
+            MockRunningWorkLifecycle::CancellationUnavailable => Ok(()),
+            MockRunningWorkLifecycle::Completed
+            | MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                Err(MockRunningWorkTransitionError::AlreadyTerminal)
+            }
         }
     }
 }
@@ -584,5 +697,123 @@ mod tests {
             MockRunningWorkState::CancellationRequested
         );
         assert_eq!(new_work.state(), MockRunningWorkState::Running);
+    }
+
+    #[test]
+    fn cancellation_request_is_not_a_confirmed_stop() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-requested"), lease);
+
+        runtime.disable();
+
+        assert_eq!(work.state(), MockRunningWorkState::CancellationRequested);
+
+        work.confirm_cancellation()
+            .expect("executor may confirm a requested cancellation");
+
+        assert_eq!(work.state(), MockRunningWorkState::StoppedAfterCancellation);
+    }
+
+    #[test]
+    fn cancellation_cannot_be_confirmed_before_request() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-no-request"), lease);
+
+        assert_eq!(
+            work.confirm_cancellation(),
+            Err(MockRunningWorkTransitionError::CancellationNotRequested)
+        );
+        assert_eq!(work.state(), MockRunningWorkState::Running);
+    }
+
+    #[test]
+    fn work_may_complete_after_cancellation_request_race() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-race"), lease);
+
+        runtime.disable();
+        assert_eq!(work.state(), MockRunningWorkState::CancellationRequested);
+
+        work.complete()
+            .expect("work may finish before cooperative cancellation takes effect");
+
+        assert_eq!(work.state(), MockRunningWorkState::Completed);
+        assert_eq!(
+            work.confirm_cancellation(),
+            Err(MockRunningWorkTransitionError::AlreadyTerminal)
+        );
+    }
+
+    #[test]
+    fn cancellation_unavailable_is_distinct_from_requested_and_stopped() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-unavailable"), lease);
+
+        runtime.disable();
+
+        work.mark_cancellation_unavailable()
+            .expect("executor may report inability to honor a cancellation request");
+
+        assert_eq!(work.state(), MockRunningWorkState::CancellationUnavailable);
+        assert_eq!(
+            work.confirm_cancellation(),
+            Err(MockRunningWorkTransitionError::CancellationUnavailable)
+        );
+
+        work.complete()
+            .expect("uncancellable work may still later complete normally");
+        assert_eq!(work.state(), MockRunningWorkState::Completed);
+    }
+
+    #[test]
+    fn terminal_running_work_states_do_not_revive_after_reenable() {
+        let runtime = RuntimeController::default();
+
+        let completed_lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut completed =
+            MockRunningWork::new(ActionId::new("running-completed"), completed_lease);
+        completed
+            .complete()
+            .expect("simulated work should complete once");
+
+        let cancelled_lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut cancelled =
+            MockRunningWork::new(ActionId::new("running-cancelled"), cancelled_lease);
+
+        runtime.disable();
+        cancelled
+            .confirm_cancellation()
+            .expect("requested cancellation should be confirmable");
+        runtime.enable_normal();
+
+        assert_eq!(completed.state(), MockRunningWorkState::Completed);
+        assert_eq!(
+            cancelled.state(),
+            MockRunningWorkState::StoppedAfterCancellation
+        );
+        assert_eq!(
+            completed.complete(),
+            Err(MockRunningWorkTransitionError::AlreadyTerminal)
+        );
+        assert_eq!(
+            cancelled.complete(),
+            Err(MockRunningWorkTransitionError::AlreadyTerminal)
+        );
     }
 }
