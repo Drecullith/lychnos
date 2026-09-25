@@ -2,19 +2,21 @@
 
 ## Current Phase
 
-**Phase 1 — Machine-Independent Core Foundation**
+**Phase 2 — Local Simulator and Prototype Runtime**
 
-Development is taking place on the Omarchy X1 Pro, but the implemented core remains intentionally independent of Omarchy and machine-specific behavior.
+Phase 1 was merged into `main` through pull request #1 after the full local and GitHub Actions quality gates passed.
+
+Development is taking place on the Omarchy X1 Pro, while Phase 2 continues to keep the core machine-independent until the simulator and safety boundaries are strong enough for real platform adapters.
 
 Current development branch:
 
 ```text
-feat/core-bootstrap
+feat/phase2-approval-flow
 ```
 
 ## Current Milestone
 
-The first end-to-end machine-independent Lychnos processing pipeline is working.
+The first Phase 2 approval boundary is working: explicit approval can now be bound to one exact structured action proposal without weakening live runtime safety.
 
 ```text
 Normalized Event
@@ -167,6 +169,27 @@ Implemented:
 - `WouldExecute`
 - `AwaitingUserApproval`
 - `Blocked`
+
+### Bound action approval flow
+
+Implemented:
+
+- `ApprovalGrant` bound to the complete structured `ActionProposal`
+- crate-private approval-grant construction
+- public issuance through `FoundationRuntime::approve_action(...)`
+- explicit `ActionApproved` security-audit records
+- approving actor label captured in the approval audit record
+- action kind, capability, impact, and risk captured at approval time
+- approval grants consumed by the execution-evaluation call
+- exact proposal matching rather than action-ID-only matching
+- modified parameters or metadata invalidate an existing approval
+- live runtime state is checked before approval can authorize the mock executor
+- Game Mode and Disabled override an existing approval
+- approval state recorded during permission evaluation
+
+The current `approved_by` field is only a caller-supplied actor label. It is not yet authenticated user identity, and there is no approval expiry, cryptographic signature, persistent grant store, or cross-process replay protection.
+
+No real system execution is introduced by the approval flow.
 
 ### Security audit model
 
@@ -335,7 +358,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-73
+81
 ```
 
 Current quality gate:
@@ -375,6 +398,7 @@ Accepted ADRs currently cover:
 0017 Collector boundary and foundation pipeline
 0018 Runtime-aware collector suppression
 0019 Mandatory security audit and separate diagnostics
+0020 Bound action approval grants
 ```
 
 ## Intentionally Mocked
@@ -453,17 +477,20 @@ Still intentionally undecided:
 - automatic updating
 - automatic Game Mode detection
 
-## Next Foundation Milestones
+## Next Phase 2 Milestones
 
-Immediate next work should remain machine-independent.
+Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. perform the final Phase 1 boundary and quality review
-2. if the review is clean, open `feat/core-bootstrap` -> `main` as the Phase 1 bootstrap pull request
-3. begin real Omarchy integration only after that foundation review and pull-request cycle
+1. exercise the approval grant through an end-to-end runtime flow rather than only direct executor evaluation
+2. define rejection and cancellation behavior around pending approvals
+3. wire typed configuration into the application runtime
+4. integrate ordinary diagnostics without weakening the mandatory security audit
+5. add richer deterministic scenarios and failure injection
+6. define cancellation semantics for already-running work before any real executor exists
 
-Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
+Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
 ## Hardware Context
 
