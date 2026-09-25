@@ -315,6 +315,20 @@ cargo run -p lychnos-cli -- disabled
 
 This remains a safe simulation. The CLI does not execute real system actions.
 
+### Canonical project documentation
+
+Implemented and synchronized:
+
+- `README.md`
+- `VISION.md`
+- `ARCHITECTURE.md`
+- `ROADMAP.md`
+- `SECURITY.md`
+- `CURRENT-STATE.md`
+- architecture decision records under `docs/decisions/`
+
+`CONTRIBUTING.md` remains intentionally deferred until the repository is ready for a wider contributor workflow.
+
 ## Automated Tests
 
 Current expected test count:
@@ -444,8 +458,9 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. expand canonical project documentation
-2. perform the final Phase 1 boundary and quality review before real Omarchy integration
+1. perform the final Phase 1 boundary and quality review
+2. if the review is clean, open `feat/core-bootstrap` -> `main` as the Phase 1 bootstrap pull request
+3. begin real Omarchy integration only after that foundation review and pull-request cycle
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
