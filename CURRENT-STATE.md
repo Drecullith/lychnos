@@ -604,8 +604,8 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       163
-Runtime adapter tests:   4
+Core workspace:       165
+Runtime adapter tests:   5
 GTK shell prototype:     5
 ```
 
@@ -670,6 +670,7 @@ Accepted ADRs currently cover:
 0041 User runtime and shell process split
 0042 Normalized voice input and PipeWire discovery
 0043 Local push-to-talk speech recognition
+0044 Provider-neutral local text-to-speech
 ```
 
 ## Intentionally Mocked
@@ -696,7 +697,6 @@ Lychnos does **not** currently have:
 - journal monitoring
 - Omarchy-specific collectors
 - hardware telemetry
-- text-to-speech
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
 - local LLM integration
@@ -758,11 +758,11 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. add provider-neutral text-to-speech and a local Lychnos voice
-2. connect a real AI provider behind `ConversationProvider` while keeping Lychnos persona/memory provider-independent
-3. add a bounded initiative/character loop so Lychnos can reason about context and speak proactively without gaining execution authority
-4. add wake-word activation on the existing local voice pipeline
-5. add explicit voice/persona settings and user-tunable speech behavior
+1. connect a real AI provider behind `ConversationProvider` while keeping Lychnos persona/memory provider-independent
+2. add a bounded initiative/character loop so Lychnos can reason about context and speak proactively without gaining execution authority
+3. add wake-word activation on the existing local voice pipeline
+4. add explicit voice/persona settings and user-tunable text/voice/both behavior
+5. add speech interruption/ducking and output-device selection
 6. keep real collectors and host execution behind their adapter/security boundaries
 
 ## Hardware Context

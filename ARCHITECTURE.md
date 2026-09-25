@@ -222,11 +222,13 @@ The Omarchy runtime discovers `Audio/Source` nodes through structured `pw-dump` 
 
 ### speech
 
-Defines the replaceable `SpeechToTextProvider` boundary and normalized `SpeechTranscript` type.
+Defines replaceable speech input/output boundaries: `SpeechToTextProvider` for recognition and `SpeechSynthesizer` for spoken output, plus normalized transcript, synthesis-request, and Lychnos-owned voice-profile types.
 
-The current Omarchy adapter runs multilingual whisper.cpp locally. Finalized PTT audio is transcribed locally, converted into a normal `InteractionSource::PushToTalk` conversation request, then deleted. Whisper non-speech tokens are suppressed, and pure annotation outputs such as `(upbeat music)` or `[Music]` are treated as no recognized speech rather than literal user text.
+The current Omarchy STT adapter runs multilingual whisper.cpp locally. Finalized PTT audio is transcribed locally, converted into a normal `InteractionSource::PushToTalk` conversation request, then deleted. Whisper non-speech tokens are suppressed, and pure annotation outputs such as `(upbeat music)` or `[Music]` are treated as no recognized speech rather than literal user text.
 
-Wake-word and voice-session capture will reuse the same normalized input, STT, persona, and conversation path.
+The current Omarchy TTS adapter runs Piper locally. The canonical `lychnos.voice.default.v1` identity is currently bound to a British male medium Piper model. Voice-originated replies are published as text and also queued to a single background speech worker for synthesis and PipeWire playback; synthesized WAV files are deleted afterward.
+
+Wake-word and voice-session capture will reuse the same normalized input, STT, persona, conversation, and speech-output path.
 
 ### memory
 

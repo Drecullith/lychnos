@@ -34,13 +34,14 @@ On an Omarchy machine, install the current desktop shell with:
 
 The installer builds the user-level Lychnos runtime and shell, installs their assets and Omarchy bar integration into user-owned locations, adds a desktop launcher, and installs the `lychnos` command.
 
-For local push-to-talk speech recognition, install the user-level whisper.cpp stack once with:
+For local voice input and spoken replies, install the user-level STT/TTS stacks once with:
 
 ```bash
 ./scripts/install-local-stt.sh
+./scripts/install-local-tts.sh
 ```
 
-This installs the multilingual Whisper base model and runtime under Lychnos-owned user directories; it does not require `sudo`.
+These install multilingual whisper.cpp speech recognition and Piper text-to-speech plus the current Lychnos baseline voice under Lychnos-owned user directories; neither requires `sudo`.
 
 After installation:
 

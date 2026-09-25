@@ -1,5 +1,6 @@
 mod audio;
 mod stt;
+mod tts;
 
 use std::{
     fs,
@@ -52,6 +53,16 @@ fn main() {
             None
         }
     };
+    let speech_output = match tts::PiperTts::discover() {
+        Ok(tts) => {
+            println!("Text-to-speech ready · {}", tts.description());
+            Some(tts::SpeechOutputWorker::start(tts))
+        }
+        Err(error) => {
+            eprintln!("Text-to-speech unavailable: {error}");
+            None
+        }
+    };
     let mut active_capture: Option<audio::ActiveCapture> = None;
 
     report_audio_inputs();
@@ -66,9 +77,15 @@ fn main() {
 
     loop {
         let runtime_changed = process_control_requests(&mut runtime);
-        process_voice_control_requests(&mut active_capture, stt.as_ref(), &provider, &persona);
+        process_voice_control_requests(
+            &mut active_capture,
+            stt.as_ref(),
+            speech_output.as_ref(),
+            &provider,
+            &persona,
+        );
         enforce_voice_capture_timeout(&mut active_capture);
-        process_interaction_requests(&provider, &persona);
+        process_interaction_requests(&provider, &persona, speech_output.as_ref());
 
         if runtime_changed {
             publish_snapshot(&runtime);
@@ -239,6 +256,7 @@ fn enforce_voice_capture_timeout(active_capture: &mut Option<audio::ActiveCaptur
 fn process_voice_control_requests(
     active_capture: &mut Option<audio::ActiveCapture>,
     stt: Option<&stt::WhisperCppStt>,
+    speech_output: Option<&tts::SpeechOutputWorker>,
     provider: &MockConversationProvider,
     persona: &PersonaProfile,
 ) {
@@ -362,7 +380,13 @@ fn process_voice_control_requests(
                             detail: "Transcribing locally with Whisper.".into(),
                         });
 
-                        match handle_completed_voice_turn(&completed, stt, provider, persona) {
+                        match handle_completed_voice_turn(
+                            &completed,
+                            stt,
+                            speech_output,
+                            provider,
+                            persona,
+                        ) {
                             Ok((transcript, interaction_id)) => {
                                 println!(
                                     "PTT transcription · {} · {}",
@@ -429,6 +453,7 @@ fn process_voice_control_requests(
 fn handle_completed_voice_turn(
     completed: &audio::CompletedCapture,
     stt: Option<&stt::WhisperCppStt>,
+    speech_output: Option<&tts::SpeechOutputWorker>,
     provider: &MockConversationProvider,
     persona: &PersonaProfile,
 ) -> Result<(String, InteractionId), String> {
@@ -449,16 +474,39 @@ fn handle_completed_voice_turn(
         text.clone(),
     );
 
-    let response = match provider.respond(persona, &request) {
-        Ok(response) => response,
-        Err(never) => match never {},
-    };
-    publish_interaction_response(&response)?;
+    handle_conversation_request(provider, persona, speech_output, &request)?;
 
     Ok((text, interaction_id))
 }
 
-fn process_interaction_requests(provider: &MockConversationProvider, persona: &PersonaProfile) {
+fn handle_conversation_request(
+    provider: &MockConversationProvider,
+    persona: &PersonaProfile,
+    speech_output: Option<&tts::SpeechOutputWorker>,
+    request: &ConversationRequest,
+) -> Result<(), String> {
+    let response = match provider.respond(persona, request) {
+        Ok(response) => response,
+        Err(never) => match never {},
+    };
+
+    publish_interaction_response(&response)?;
+
+    if request.source != InteractionSource::Typed
+        && let Some(speech_output) = speech_output
+        && let Err(error) = speech_output.speak(response.text.clone())
+    {
+        eprintln!("Failed to queue spoken Lychnos reply: {error}");
+    }
+
+    Ok(())
+}
+
+fn process_interaction_requests(
+    provider: &MockConversationProvider,
+    persona: &PersonaProfile,
+    speech_output: Option<&tts::SpeechOutputWorker>,
+) {
     for path in sorted_json_files(&interaction_inbox_path()) {
         let contents = match fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -491,14 +539,10 @@ fn process_interaction_requests(provider: &MockConversationProvider, persona: &P
             continue;
         }
 
-        let response = match provider.respond(persona, &request) {
-            Ok(response) => response,
-            Err(never) => match never {},
-        };
-
-        if let Err(error) = publish_interaction_response(&response) {
+        if let Err(error) = handle_conversation_request(provider, persona, speech_output, &request)
+        {
             eprintln!(
-                "Failed to publish response for {}: {error}",
+                "Failed to handle interaction {}: {error}",
                 request.id.as_str()
             );
             continue;
