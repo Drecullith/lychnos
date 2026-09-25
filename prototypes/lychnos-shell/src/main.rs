@@ -23,6 +23,23 @@ const APP_ID: &str = "org.lychnos.prototype.shell";
 const DEFAULT_TOP_MARGIN: i32 = 36;
 const DEFAULT_RIGHT_MARGIN: i32 = 42;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ShellPreferences {
+    status_visible: bool,
+    ghosted: bool,
+    position_locked: bool,
+}
+
+impl Default for ShellPreferences {
+    fn default() -> Self {
+        Self {
+            status_visible: true,
+            ghosted: false,
+            position_locked: false,
+        }
+    }
+}
+
 // Excited and Speaking are part of the canonical expression vocabulary but
 // do not have live core states until later interaction/voice phases.
 #[allow(dead_code)]
@@ -48,6 +65,7 @@ fn build_ui(app: &Application) {
 
     let initial_state = load_presentation_snapshot().unwrap_or_else(default_presentation_state);
     let state = Rc::new(RefCell::new(initial_state));
+    let preferences = Rc::new(RefCell::new(load_shell_preferences()));
     let dragging = Rc::new(Cell::new(false));
     let body = build_body(Rc::clone(&state), Rc::clone(&dragging));
     let status = build_status_card(&state.borrow());
@@ -56,6 +74,17 @@ fn build_ui(app: &Application) {
     layout.set_halign(gtk::Align::Center);
     layout.append(&body);
     layout.append(&status.card);
+
+    let initial_preferences = *preferences.borrow();
+    status.card.set_visible(initial_preferences.status_visible);
+    let initial_opacity = if initial_preferences.ghosted {
+        0.28
+    } else {
+        1.0
+    };
+    body.set_opacity(initial_opacity);
+    status.card.set_opacity(initial_opacity);
+
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Lychnos Shell Prototype")
@@ -83,6 +112,7 @@ fn build_ui(app: &Application) {
         top_margin,
         right_margin,
         Rc::clone(&dragging),
+        Rc::clone(&preferences),
     );
     install_live_presentation_updates(Rc::clone(&state), &body, &status);
 
@@ -102,8 +132,13 @@ fn build_ui(app: &Application) {
         gtk::glib::Propagation::Proceed
     });
 
-    window.present();
-    save_shell_presence("visible");
+    if load_shell_presence().as_deref() == Some("hidden") {
+        window.set_visible(false);
+        save_shell_presence("hidden");
+    } else {
+        window.present();
+        save_shell_presence("visible");
+    }
 }
 
 fn install_shell_interactions(
@@ -113,14 +148,14 @@ fn install_shell_interactions(
     top_margin: i32,
     right_margin: i32,
     dragging: Rc<Cell<bool>>,
+    preferences: Rc<RefCell<ShellPreferences>>,
 ) {
     let current_top = Rc::new(Cell::new(top_margin));
     let current_right = Rc::new(Cell::new(right_margin));
     let drag_start_top = Rc::new(Cell::new(top_margin));
     let drag_start_right = Rc::new(Cell::new(right_margin));
-    let position_locked = Rc::new(Cell::new(false));
-    let status_visible = Rc::new(Cell::new(true));
-    status.set_visible(true);
+    let initial_preferences = *preferences.borrow();
+    status.set_visible(initial_preferences.status_visible);
 
     let drag = GestureDrag::new();
 
@@ -130,11 +165,11 @@ fn install_shell_interactions(
         let drag_start_top = Rc::clone(&drag_start_top);
         let drag_start_right = Rc::clone(&drag_start_right);
         let dragging = Rc::clone(&dragging);
-        let position_locked = Rc::clone(&position_locked);
+        let preferences = Rc::clone(&preferences);
         let body = body.clone();
 
         drag.connect_drag_begin(move |_, _, _| {
-            if position_locked.get() {
+            if preferences.borrow().position_locked {
                 dragging.set(false);
                 return;
             }
@@ -152,10 +187,10 @@ fn install_shell_interactions(
         let current_right = Rc::clone(&current_right);
         let drag_start_top = Rc::clone(&drag_start_top);
         let drag_start_right = Rc::clone(&drag_start_right);
-        let position_locked = Rc::clone(&position_locked);
+        let preferences = Rc::clone(&preferences);
 
         drag.connect_drag_update(move |_, offset_x, offset_y| {
-            if position_locked.get() {
+            if preferences.borrow().position_locked {
                 return;
             }
 
@@ -174,14 +209,14 @@ fn install_shell_interactions(
         let current_top = Rc::clone(&current_top);
         let current_right = Rc::clone(&current_right);
         let dragging = Rc::clone(&dragging);
-        let position_locked = Rc::clone(&position_locked);
+        let preferences = Rc::clone(&preferences);
         let body = body.clone();
 
         drag.connect_drag_end(move |_, _, _| {
             dragging.set(false);
             body.queue_draw();
 
-            if !position_locked.get() {
+            if !preferences.borrow().position_locked {
                 save_shell_position(current_top.get(), current_right.get());
             }
         });
@@ -193,12 +228,13 @@ fn install_shell_interactions(
     click.set_button(1);
     {
         let status = status.clone();
-        let status_visible = Rc::clone(&status_visible);
+        let preferences = Rc::clone(&preferences);
         click.connect_released(move |_, press_count, _, _| {
             if press_count == 2 {
-                let visible = !status_visible.get();
-                status_visible.set(visible);
+                let visible = !preferences.borrow().status_visible;
                 status.set_visible(visible);
+                preferences.borrow_mut().status_visible = visible;
+                save_shell_preferences(*preferences.borrow());
             }
         });
     }
@@ -210,8 +246,7 @@ fn install_shell_interactions(
         status,
         Rc::clone(&current_top),
         Rc::clone(&current_right),
-        Rc::clone(&position_locked),
-        Rc::clone(&status_visible),
+        Rc::clone(&preferences),
     );
 }
 
@@ -221,8 +256,7 @@ fn install_context_menu(
     status: &GtkBox,
     current_top: Rc<Cell<i32>>,
     current_right: Rc<Cell<i32>>,
-    position_locked: Rc<Cell<bool>>,
-    status_visible: Rc<Cell<bool>>,
+    preferences: Rc<RefCell<ShellPreferences>>,
 ) {
     let popover = gtk::Popover::new();
     popover.set_has_arrow(true);
@@ -232,15 +266,24 @@ fn install_context_menu(
     let menu = GtkBox::new(Orientation::Vertical, 3);
     menu.add_css_class("lychnos-menu-box");
 
-    let ghost_button = gtk::Button::with_label("See-through");
+    let initial_preferences = *preferences.borrow();
+    let ghost_button = gtk::Button::with_label(if initial_preferences.ghosted {
+        "Normal opacity"
+    } else {
+        "See-through"
+    });
     ghost_button.add_css_class("lychnos-menu-item");
-    let status_button = gtk::Button::with_label(if status_visible.get() {
+    let status_button = gtk::Button::with_label(if initial_preferences.status_visible {
         "Hide status"
     } else {
         "Show status"
     });
     status_button.add_css_class("lychnos-menu-item");
-    let lock_button = gtk::Button::with_label("Lock position");
+    let lock_button = gtk::Button::with_label(if initial_preferences.position_locked {
+        "Unlock position"
+    } else {
+        "Lock position"
+    });
     lock_button.add_css_class("lychnos-menu-item");
     let minimize_button = gtk::Button::with_label("Minimize to top bar");
     minimize_button.add_css_class("lychnos-menu-item");
@@ -260,19 +303,19 @@ fn install_context_menu(
     menu.append(&close_button);
     popover.set_child(Some(&menu));
 
-    let ghosted = Rc::new(Cell::new(false));
     {
-        let ghosted = Rc::clone(&ghosted);
         let body = body.clone();
         let status = status.clone();
         let popover = popover.clone();
+        let preferences = Rc::clone(&preferences);
 
         ghost_button.connect_clicked(move |button| {
-            let next = !ghosted.get();
-            ghosted.set(next);
+            let next = !preferences.borrow().ghosted;
             let opacity = if next { 0.28 } else { 1.0 };
             body.set_opacity(opacity);
             status.set_opacity(opacity);
+            preferences.borrow_mut().ghosted = next;
+            save_shell_preferences(*preferences.borrow());
             button.set_label(if next {
                 "Normal opacity"
             } else {
@@ -284,13 +327,14 @@ fn install_context_menu(
 
     {
         let status = status.clone();
-        let status_visible = Rc::clone(&status_visible);
         let popover = popover.clone();
+        let preferences = Rc::clone(&preferences);
 
         status_button.connect_clicked(move |button| {
-            let visible = !status_visible.get();
-            status_visible.set(visible);
+            let visible = !preferences.borrow().status_visible;
             status.set_visible(visible);
+            preferences.borrow_mut().status_visible = visible;
+            save_shell_preferences(*preferences.borrow());
             button.set_label(if visible {
                 "Hide status"
             } else {
@@ -301,12 +345,13 @@ fn install_context_menu(
     }
 
     {
-        let position_locked = Rc::clone(&position_locked);
         let popover = popover.clone();
+        let preferences = Rc::clone(&preferences);
 
         lock_button.connect_clicked(move |button| {
-            let locked = !position_locked.get();
-            position_locked.set(locked);
+            let locked = !preferences.borrow().position_locked;
+            preferences.borrow_mut().position_locked = locked;
+            save_shell_preferences(*preferences.borrow());
             button.set_label(if locked {
                 "Unlock position"
             } else {
@@ -357,13 +402,26 @@ fn install_context_menu(
     {
         let popover = popover.clone();
         let status_button = status_button.clone();
-        let status_visible = Rc::clone(&status_visible);
+        let lock_button = lock_button.clone();
+        let ghost_button = ghost_button.clone();
+        let preferences = Rc::clone(&preferences);
 
         context_click.connect_pressed(move |_, _, x, y| {
-            status_button.set_label(if status_visible.get() {
+            let current = *preferences.borrow();
+            status_button.set_label(if current.status_visible {
                 "Hide status"
             } else {
                 "Show status"
+            });
+            lock_button.set_label(if current.position_locked {
+                "Unlock position"
+            } else {
+                "Lock position"
+            });
+            ghost_button.set_label(if current.ghosted {
+                "Normal opacity"
+            } else {
+                "See-through"
             });
             let rect = gtk::gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
@@ -390,6 +448,64 @@ fn clamp_shell_position(window: &ApplicationWindow, top: i32, right: i32) -> (i3
     let max_top = (geometry.height() - window_height).max(0);
 
     (top.clamp(0, max_top), right.clamp(0, max_right))
+}
+
+fn shell_preferences_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(path).join("lychnos/shell-preferences.conf"));
+    }
+
+    std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".config/lychnos/shell-preferences.conf"))
+}
+
+fn load_shell_preferences() -> ShellPreferences {
+    let Some(path) = shell_preferences_path() else {
+        return ShellPreferences::default();
+    };
+
+    let Ok(contents) = fs::read_to_string(path) else {
+        return ShellPreferences::default();
+    };
+
+    let mut preferences = ShellPreferences::default();
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("status_visible=") {
+            preferences.status_visible = value == "true";
+        } else if let Some(value) = line.strip_prefix("ghosted=") {
+            preferences.ghosted = value == "true";
+        } else if let Some(value) = line.strip_prefix("position_locked=") {
+            preferences.position_locked = value == "true";
+        }
+    }
+
+    preferences
+}
+
+fn save_shell_preferences(preferences: ShellPreferences) {
+    let Some(path) = shell_preferences_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+
+    let contents = format!(
+        "status_visible={}\nghosted={}\nposition_locked={}\n",
+        preferences.status_visible, preferences.ghosted, preferences.position_locked
+    );
+    let _ = fs::write(path, contents);
+}
+
+fn load_shell_presence() -> Option<String> {
+    let path = shell_presence_path()?;
+    fs::read_to_string(path)
+        .ok()
+        .map(|contents| contents.trim().to_string())
 }
 
 fn shell_presence_path() -> Option<PathBuf> {

@@ -372,6 +372,7 @@ Implemented:
 - drag-to-move and remembered position
 - double-click status toggle
 - right-click see-through, status, position lock/reset, minimize, and close controls
+- restart-safe shell preferences for status visibility, see-through opacity, position lock, and minimized/visible presence
 - Omarchy top-bar minimize/restore integration under `integrations/omarchy/bar/`
 - lightweight idle float/pulse animation
 - no executor, approval grant, runtime controller, or host-action authority in the shell
@@ -731,11 +732,10 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. persist shell preferences such as status visibility, opacity/ghost preference, position lock, and minimized state
-2. add a safe true click-through Ghost Mode with a guaranteed restore path through the Omarchy top-bar icon
-3. expose pending-approval presentation controls without granting the shell direct execution authority
-4. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
-5. keep real collectors, AI-provider integration, and host execution behind their adapter/security boundaries
+1. add a safe true click-through Ghost Mode with a guaranteed restore path through the Omarchy top-bar icon
+2. expose pending-approval presentation controls without granting the shell direct execution authority
+3. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
+4. keep real collectors, AI-provider integration, and host execution behind their adapter/security boundaries
 
 ## Hardware Context
 
