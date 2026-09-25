@@ -211,7 +211,7 @@ Implemented:
 - runtime-blocked approved proposals remain pending
 - pending approval flow is covered by end-to-end runtime tests
 
-Pending actions are still in-memory only. Expiry, persistence, restart recovery, and system-driven cancellation are not implemented yet.
+Pending actions are still in-memory only. Expiry, persistence, and restart recovery are not implemented yet.
 
 ### Explicit pending action rejection
 
@@ -228,7 +228,25 @@ Implemented:
 - rejection remains available in Normal, Game Mode, and Disabled
 - pending removal occurs before audit append so future audit-storage failure cannot undo user refusal
 
-Rejection is intentionally distinct from future cancellation semantics.
+Rejection is intentionally distinct from system-driven cancellation.
+
+### System-driven pending action cancellation
+
+Implemented:
+
+- dedicated `ActionCancelled` security-audit event
+- `PendingActionCancellationReason` with stable audit representations
+- exact-proposal `cancel_pending_action(...)` boundary
+- cancellation uses the runtime-owned `foundation-runtime` actor rather than a user actor label
+- unknown proposals cannot be cancelled
+- stale proposals cannot cancel newer replacements with the same action ID
+- structurally different same-ID proposals cancel the older pending proposal as `Superseded` before the replacement is evaluated
+- cancellation audit records preserve action ID, source event when present, action kind, capability, impact, risk, and cancellation reason
+- cancellation remains available while Disabled
+- explicit user rejection remains semantically and audibly separate from system cancellation
+- entering Disabled does not automatically cancel all pending proposals; blocked approval attempts still retain pending state for later retry
+
+System cancellation currently applies only to pending actions. Cancellation of already-running work remains a separate future boundary.
 
 ### Security audit model
 
@@ -325,7 +343,7 @@ Implemented:
 - CLI simulation arguments temporarily modify typed config rather than bypassing it
 - filesystem/config-discovery policy remains outside the machine-independent core
 
-Only `runtime.startup_mode` is consumed by the runtime so far. Memory, diagnostics, privacy, persistence, and provider-related settings will be wired into their owning subsystems incrementally.
+`runtime.startup_mode` and `diagnostics.enabled` are currently consumed by the runtime. Memory, privacy, persistence, and provider-related settings will be wired into their owning subsystems incrementally.
 
 ### ID and time providers
 
@@ -437,7 +455,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-101
+106
 ```
 
 Current quality gate:
@@ -484,6 +502,7 @@ Accepted ADRs currently cover:
 0024 Runtime diagnostics integration
 0025 Deterministic collector failure scenarios
 0026 Deterministic multi-step scenarios
+0027 System-driven pending action cancellation
 ```
 
 ## Intentionally Mocked
@@ -568,9 +587,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. define system-driven cancellation semantics separately from explicit user rejection
-2. extend deterministic scenarios with approval/rejection lifecycle steps where useful
-3. define cancellation semantics for already-running work before any real executor exists
+1. extend deterministic scenarios with approval/rejection/cancellation lifecycle steps where useful
+2. define cancellation semantics for already-running work before any real executor exists
+3. continue strengthening prototype lifecycle and failure behavior before real adapters
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
