@@ -23,3 +23,14 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 - [Architecture decisions](docs/decisions/)
 
 The current codebase is still in the machine-independent foundation phase. Real Omarchy monitoring, AI-provider integration, voice, and system execution are intentionally deferred until the core safety boundaries are stable.
+
+## License
+
+Lychnos is dual-licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in Lychnos is licensed under the same terms.
