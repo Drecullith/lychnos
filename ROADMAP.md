@@ -91,7 +91,8 @@ Likely work:
 - deterministic cooperation-window assessment for delayed acknowledgement, timeout observation, cancellation-unavailable behavior, and completion races without choosing a production timer/escalation mechanism
 - tracked mock running-work lifecycle through the foundation runtime and deterministic scenario runner
 - resource-budget instrumentation abstractions for later Game Mode testing (typed observations, explicit units, mode-specific budgets, mismatch handling, and in-memory observation log now implemented; real sampling remains deferred)
-- read-only presentation-state projection for an early visual-shell prototype without granting UI execution authority
+- read-only presentation-state projection for an early visual-shell prototype without granting UI execution authority (implemented)
+- thin desktop visual-shell prototype around the canonical floating Lychnos body, consuming projected state only
 
 This phase should make it possible to exercise Lychnos behavior end to end before granting it meaningful access to the host system.
 

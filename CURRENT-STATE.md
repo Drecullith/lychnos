@@ -336,6 +336,22 @@ Implemented:
 
 No real resource sampler is implemented yet. The core deliberately does not choose Linux telemetry sources, production metric names, measurement windows, thresholds, sampling cadence, background tasks, or an async runtime. Phase 3 adapters can later supply real Omarchy measurements through this boundary.
 
+### Read-only companion presentation state
+
+Implemented:
+
+- machine-independent `presentation` module
+- `CompanionPresentationState` as an owned read-only UI projection
+- projected runtime mode and diagnostics-enabled state
+- projected pending approvals containing descriptive action data only
+- projected tracked mock-work state with terminal/cooperation-pending flags
+- latest ordinary diagnostic projection when available
+- `FoundationRuntime::presentation_state()`
+- tests proving projection does not mutate pending actions, mock work, runtime state, or audit history
+- no approval grants, runtime controller, executor, mutable runtime reference, or direct action method exposed through the presentation model
+
+This boundary exists so an early floating-body UI can render safe simulated/projected state without gaining execution authority.
+
 ### Lychnos-owned memory
 
 Implemented:
@@ -522,7 +538,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-147
+152
 ```
 
 Current quality gate:
@@ -578,6 +594,7 @@ Accepted ADRs currently cover:
 0033 Simulation work lifecycle reporting and audit
 0034 Deterministic running-work cooperation windows
 0035 Resource budget instrumentation abstractions
+0036 Read-only companion presentation state
 ```
 
 ## Intentionally Mocked
@@ -667,9 +684,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. define a read-only companion/presentation-state projection so a UI can consume runtime mode, pending approvals, alerts, and mock lifecycle state without receiving execution authority
-2. build a thin desktop visual-shell prototype around the canonical floating Lychnos body using simulated/projected state only
-3. keep real Omarchy collectors, real resource sampling, and any host execution behind Phase 3 adapter and security boundaries
+1. build a thin desktop visual-shell prototype around the canonical floating Lychnos body using the read-only presentation state
+2. wire safe simulated mode/status changes into that shell so Normal, Game Mode, Disabled, approvals, and alerts are visibly distinct
+3. keep real Omarchy collectors, real resource sampling, AI-provider integration, and any host execution behind their later adapter/security boundaries
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 

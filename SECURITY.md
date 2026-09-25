@@ -139,6 +139,12 @@ This reduces the chance that an action analyzed under one mode executes after th
 
 A future real executor must re-check live runtime state immediately before actual execution.
 
+## Presentation Boundary
+
+The read-only presentation projection may expose descriptive runtime state to a UI, but it does not contain approval grants, executors, the runtime controller, mutable runtime references, or direct action methods.
+
+Rendering the floating Lychnos body or an approval/status view must not itself authorize or execute an action. Future UI commands must return through explicit application and permission boundaries.
+
 ## Collector Security
 
 Collectors are adapters between native platform data and Lychnos events.

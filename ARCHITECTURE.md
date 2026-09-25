@@ -176,6 +176,14 @@ The current module provides typed metric names, explicit units, deterministic bu
 
 It does not sample the host. Linux/Omarchy telemetry sources, real thresholds, sampling cadence, measurement windows, and background scheduling remain adapter-level future work.
 
+### presentation
+
+Defines owned read-only state intended for desktop and portable presentation layers.
+
+The current `CompanionPresentationState` projects runtime mode, pending approvals, tracked simulation work, and the latest ordinary diagnostic without exposing approval grants, executors, runtime controllers, or mutation handles.
+
+This allows an early visual shell to depend on core state without becoming an execution authority.
+
 ### memory
 
 Defines Lychnos-owned, model-independent memory records and the `MemoryStore` interface.
@@ -212,7 +220,7 @@ It owns the foundation event bus, internal subscription, runtime safety controll
 
 It accepts already-normalized events directly and can also pull one event from a collector while respecting runtime background-work suppression.
 
-For Phase 2 simulation it also retains mock running-work records by action ID, exposes read-only lifecycle snapshots, and mediates audited lifecycle transitions without granting host execution authority.
+For Phase 2 simulation it also retains mock running-work records by action ID, exposes read-only lifecycle snapshots, mediates audited lifecycle transitions, and produces an owned companion presentation projection without granting host execution authority.
 
 ## CLI Crate
 
