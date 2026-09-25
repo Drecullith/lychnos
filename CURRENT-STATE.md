@@ -409,8 +409,17 @@ Implemented:
 - deterministic proof that Disabled persists until explicit enable
 - deterministic proof that a scenario can continue and recover after an injected collector failure
 - accumulated runtime-transition audit history across a scenario
+- proposal-evaluation steps for structured actions
+- exact pending-action approval steps with actor labels
+- exact explicit rejection steps with actor labels
+- exact system-cancellation steps with structured cancellation reasons
+- typed lifecycle results preserving `PendingActionError`
+- deterministic approval story from pending state to mock advancement
+- deterministic explicit-rejection story with `ActionRejected`
+- deterministic system-cancellation story with `ActionCancelled`
+- deterministic Disabled-mode approval retry: blocked approval retains pending state, explicit re-enable permits retry of the same exact proposal
 
-The scenario layer is simulation orchestration only. It does not bypass runtime safety, permission checks, approval boundaries, or security auditing.
+The scenario layer is simulation orchestration only. It delegates lifecycle authority to `FoundationRuntime` and does not bypass runtime safety, permission checks, approval boundaries, cancellation semantics, or security auditing.
 
 ### CLI foundation simulation
 
@@ -455,7 +464,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-106
+110
 ```
 
 Current quality gate:
@@ -503,6 +512,7 @@ Accepted ADRs currently cover:
 0025 Deterministic collector failure scenarios
 0026 Deterministic multi-step scenarios
 0027 System-driven pending action cancellation
+0028 Pending action lifecycle scenarios
 ```
 
 ## Intentionally Mocked
@@ -587,9 +597,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. extend deterministic scenarios with approval/rejection/cancellation lifecycle steps where useful
-2. define cancellation semantics for already-running work before any real executor exists
-3. continue strengthening prototype lifecycle and failure behavior before real adapters
+1. define cancellation semantics for already-running work before any real executor exists
+2. continue strengthening prototype lifecycle and failure behavior before real adapters
+3. identify the next machine-independent boundary needed before Phase 3 host integration
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
