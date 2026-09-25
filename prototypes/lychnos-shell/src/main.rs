@@ -78,7 +78,24 @@ fn build_ui(app: &Application) {
         Rc::clone(&dragging),
     );
 
+    let restore_action = gtk::gio::SimpleAction::new("restore", None);
+    {
+        let window = window.clone();
+        restore_action.connect_activate(move |_, _| {
+            window.set_visible(true);
+            window.present();
+            save_shell_presence("visible");
+        });
+    }
+    app.add_action(&restore_action);
+
+    window.connect_close_request(|_| {
+        save_shell_presence("closed");
+        gtk::glib::Propagation::Proceed
+    });
+
     window.present();
+    save_shell_presence("visible");
 }
 
 fn install_shell_interactions(
@@ -94,6 +111,8 @@ fn install_shell_interactions(
     let drag_start_top = Rc::new(Cell::new(top_margin));
     let drag_start_right = Rc::new(Cell::new(right_margin));
     let position_locked = Rc::new(Cell::new(false));
+    let status_visible = Rc::new(Cell::new(true));
+    status.set_visible(true);
 
     let drag = GestureDrag::new();
 
@@ -166,9 +185,12 @@ fn install_shell_interactions(
     click.set_button(1);
     {
         let status = status.clone();
+        let status_visible = Rc::clone(&status_visible);
         click.connect_released(move |_, press_count, _, _| {
             if press_count == 2 {
-                status.set_visible(!status.is_visible());
+                let visible = !status_visible.get();
+                status_visible.set(visible);
+                status.set_visible(visible);
             }
         });
     }
@@ -181,6 +203,7 @@ fn install_shell_interactions(
         Rc::clone(&current_top),
         Rc::clone(&current_right),
         Rc::clone(&position_locked),
+        Rc::clone(&status_visible),
     );
 }
 
@@ -191,6 +214,7 @@ fn install_context_menu(
     current_top: Rc<Cell<i32>>,
     current_right: Rc<Cell<i32>>,
     position_locked: Rc<Cell<bool>>,
+    status_visible: Rc<Cell<bool>>,
 ) {
     let popover = gtk::Popover::new();
     popover.set_has_arrow(true);
@@ -202,7 +226,7 @@ fn install_context_menu(
 
     let ghost_button = gtk::Button::with_label("See-through");
     ghost_button.add_css_class("lychnos-menu-item");
-    let status_button = gtk::Button::with_label(if status.is_visible() {
+    let status_button = gtk::Button::with_label(if status_visible.get() {
         "Hide status"
     } else {
         "Show status"
@@ -210,6 +234,8 @@ fn install_context_menu(
     status_button.add_css_class("lychnos-menu-item");
     let lock_button = gtk::Button::with_label("Lock position");
     lock_button.add_css_class("lychnos-menu-item");
+    let minimize_button = gtk::Button::with_label("Minimize to top bar");
+    minimize_button.add_css_class("lychnos-menu-item");
     let reset_button = gtk::Button::with_label("Reset position");
     reset_button.add_css_class("lychnos-menu-item");
     let close_button = gtk::Button::with_label("Close Lychnos");
@@ -220,6 +246,7 @@ fn install_context_menu(
     menu.append(&status_button);
     menu.append(&lock_button);
     menu.append(&gtk::Separator::new(Orientation::Horizontal));
+    menu.append(&minimize_button);
     menu.append(&reset_button);
     menu.append(&gtk::Separator::new(Orientation::Horizontal));
     menu.append(&close_button);
@@ -249,10 +276,12 @@ fn install_context_menu(
 
     {
         let status = status.clone();
+        let status_visible = Rc::clone(&status_visible);
         let popover = popover.clone();
 
         status_button.connect_clicked(move |button| {
-            let visible = !status.is_visible();
+            let visible = !status_visible.get();
+            status_visible.set(visible);
             status.set_visible(visible);
             button.set_label(if visible {
                 "Hide status"
@@ -281,6 +310,17 @@ fn install_context_menu(
 
     {
         let window = window.clone();
+        let popover = popover.clone();
+
+        minimize_button.connect_clicked(move |_| {
+            popover.popdown();
+            save_shell_presence("hidden");
+            window.set_visible(false);
+        });
+    }
+
+    {
+        let window = window.clone();
         let current_top = Rc::clone(&current_top);
         let current_right = Rc::clone(&current_right);
         let popover = popover.clone();
@@ -299,6 +339,7 @@ fn install_context_menu(
         let window = window.clone();
 
         close_button.connect_clicked(move |_| {
+            save_shell_presence("closed");
             window.close();
         });
     }
@@ -307,8 +348,15 @@ fn install_context_menu(
     context_click.set_button(3);
     {
         let popover = popover.clone();
+        let status_button = status_button.clone();
+        let status_visible = Rc::clone(&status_visible);
 
         context_click.connect_pressed(move |_, _, x, y| {
+            status_button.set_label(if status_visible.get() {
+                "Hide status"
+            } else {
+                "Show status"
+            });
             let rect = gtk::gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
             popover.popup();
@@ -334,6 +382,38 @@ fn clamp_shell_position(window: &ApplicationWindow, top: i32, right: i32) -> (i3
     let max_top = (geometry.height() - window_height).max(0);
 
     (top.clamp(0, max_top), right.clamp(0, max_right))
+}
+
+fn shell_presence_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("XDG_STATE_HOME") {
+        return Some(PathBuf::from(path).join("lychnos/shell-presence"));
+    }
+
+    std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".local/state/lychnos/shell-presence"))
+}
+
+fn save_shell_presence(state: &str) {
+    let Some(path) = shell_presence_path() else {
+        return;
+    };
+
+    let Some(parent) = path.parent() else {
+        return;
+    };
+
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+
+    let _ = fs::write(
+        path,
+        format!(
+            "{state}
+"
+        ),
+    );
 }
 
 fn shell_position_path() -> Option<PathBuf> {
