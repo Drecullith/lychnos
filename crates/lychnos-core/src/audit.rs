@@ -50,6 +50,10 @@ pub enum AuditEventKind {
     ActionCancelled,
     PermissionEvaluated,
     RuntimeModeChanged,
+    /// Simulation-only running-work lifecycle transition.
+    ///
+    /// This deliberately does not claim that host execution occurred.
+    SimulationWorkLifecycleChanged,
     ActionExecutionAttempted,
     ActionExecutionCompleted,
 }

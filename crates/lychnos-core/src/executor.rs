@@ -74,6 +74,34 @@ pub enum MockRunningWorkState {
     StoppedAfterCancellation,
 }
 
+impl MockRunningWorkState {
+    /// Stable machine-readable label used by prototype lifecycle reporting.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::PauseRequested => "pause_requested",
+            Self::PausedForGameMode => "paused_for_game_mode",
+            Self::CancellationRequested => "cancellation_requested",
+            Self::CancellationUnavailable => "cancellation_unavailable",
+            Self::Completed => "completed",
+            Self::StoppedAfterCancellation => "stopped_after_cancellation",
+        }
+    }
+
+    /// Returns whether this state is terminal for the tracked work item.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::StoppedAfterCancellation)
+    }
+
+    /// Returns whether runtime safety is waiting for executor cooperation.
+    #[must_use]
+    pub const fn cooperation_pending(self) -> bool {
+        matches!(self, Self::PauseRequested | Self::CancellationRequested)
+    }
+}
+
 /// Invalid simulated running-work lifecycle transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockRunningWorkTransitionError {

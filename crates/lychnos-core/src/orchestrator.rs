@@ -72,6 +72,16 @@ pub enum MockWorkError {
     Transition(MockRunningWorkTransitionError),
 }
 
+/// Point-in-time report for one simulation-only running-work item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MockWorkLifecycleSnapshot {
+    pub action_id: ActionId,
+    pub state: MockRunningWorkState,
+    pub runtime_mode: RuntimeMode,
+    pub terminal: bool,
+    pub cooperation_pending: bool,
+}
+
 /// Failure while acting on a proposal that should still be pending approval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingActionError {
@@ -248,7 +258,8 @@ where
 
         let work = MockRunningWork::new(action_id.clone(), lease);
         let state = work.state();
-        self.mock_work.insert(action_id, work);
+        self.mock_work.insert(action_id.clone(), work);
+        self.audit_mock_work_transition(&action_id, "start", None, state);
 
         Ok(state)
     }
@@ -257,6 +268,20 @@ where
     #[must_use]
     pub fn mock_work_state(&self, action_id: &ActionId) -> Option<MockRunningWorkState> {
         self.mock_work.get(action_id).map(MockRunningWork::state)
+    }
+
+    /// Returns a structured point-in-time lifecycle report for mock work.
+    #[must_use]
+    pub fn mock_work_snapshot(&self, action_id: &ActionId) -> Option<MockWorkLifecycleSnapshot> {
+        let state = self.mock_work_state(action_id)?;
+
+        Some(MockWorkLifecycleSnapshot {
+            action_id: action_id.clone(),
+            state,
+            runtime_mode: self.runtime.mode(),
+            terminal: state.is_terminal(),
+            cooperation_pending: state.cooperation_pending(),
+        })
     }
 
     /// Returns the number of simulation-only work items retained for lifecycle
@@ -271,10 +296,17 @@ where
         &mut self,
         action_id: &ActionId,
     ) -> Result<MockRunningWorkState, MockWorkError> {
-        let work = self.mock_work_mut(action_id)?;
-        work.confirm_game_mode_pause()
-            .map_err(MockWorkError::Transition)?;
-        Ok(work.state())
+        let (before, after) = {
+            let work = self.mock_work_mut(action_id)?;
+            let before = work.state();
+            work.confirm_game_mode_pause()
+                .map_err(MockWorkError::Transition)?;
+            (before, work.state())
+        };
+
+        self.audit_mock_work_transition(action_id, "confirm_game_mode_pause", Some(before), after);
+
+        Ok(after)
     }
 
     /// Explicitly resumes one tracked work item after Game Mode.
@@ -282,10 +314,17 @@ where
         &mut self,
         action_id: &ActionId,
     ) -> Result<MockRunningWorkState, MockWorkError> {
-        let work = self.mock_work_mut(action_id)?;
-        work.resume_after_game_mode()
-            .map_err(MockWorkError::Transition)?;
-        Ok(work.state())
+        let (before, after) = {
+            let work = self.mock_work_mut(action_id)?;
+            let before = work.state();
+            work.resume_after_game_mode()
+                .map_err(MockWorkError::Transition)?;
+            (before, work.state())
+        };
+
+        self.audit_mock_work_transition(action_id, "resume_after_game_mode", Some(before), after);
+
+        Ok(after)
     }
 
     /// Confirms Disabled-mode cancellation for one tracked work item.
@@ -293,10 +332,45 @@ where
         &mut self,
         action_id: &ActionId,
     ) -> Result<MockRunningWorkState, MockWorkError> {
-        let work = self.mock_work_mut(action_id)?;
-        work.confirm_cancellation()
-            .map_err(MockWorkError::Transition)?;
-        Ok(work.state())
+        let (before, after) = {
+            let work = self.mock_work_mut(action_id)?;
+            let before = work.state();
+            work.confirm_cancellation()
+                .map_err(MockWorkError::Transition)?;
+            (before, work.state())
+        };
+
+        self.audit_mock_work_transition(
+            action_id,
+            "confirm_disabled_cancellation",
+            Some(before),
+            after,
+        );
+
+        Ok(after)
+    }
+
+    /// Records that a tracked work item cannot honor Disabled cancellation.
+    pub fn mark_mock_work_cancellation_unavailable(
+        &mut self,
+        action_id: &ActionId,
+    ) -> Result<MockRunningWorkState, MockWorkError> {
+        let (before, after) = {
+            let work = self.mock_work_mut(action_id)?;
+            let before = work.state();
+            work.mark_cancellation_unavailable()
+                .map_err(MockWorkError::Transition)?;
+            (before, work.state())
+        };
+
+        self.audit_mock_work_transition(
+            action_id,
+            "mark_cancellation_unavailable",
+            Some(before),
+            after,
+        );
+
+        Ok(after)
     }
 
     /// Marks one tracked work item as normally completed.
@@ -304,9 +378,16 @@ where
         &mut self,
         action_id: &ActionId,
     ) -> Result<MockRunningWorkState, MockWorkError> {
-        let work = self.mock_work_mut(action_id)?;
-        work.complete().map_err(MockWorkError::Transition)?;
-        Ok(work.state())
+        let (before, after) = {
+            let work = self.mock_work_mut(action_id)?;
+            let before = work.state();
+            work.complete().map_err(MockWorkError::Transition)?;
+            (before, work.state())
+        };
+
+        self.audit_mock_work_transition(action_id, "complete", Some(before), after);
+
+        Ok(after)
     }
 
     fn mock_work_mut(
@@ -318,6 +399,50 @@ where
             .ok_or_else(|| MockWorkError::NotTracked {
                 action_id: action_id.clone(),
             })
+    }
+
+    fn audit_mock_work_transition(
+        &mut self,
+        action_id: &ActionId,
+        operation: &'static str,
+        before: Option<MockRunningWorkState>,
+        after: MockRunningWorkState,
+    ) {
+        let before_label = before.map_or("untracked", MockRunningWorkState::as_str);
+
+        let record = AuditRecord::new(
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+            AuditEventKind::SimulationWorkLifecycleChanged,
+            "foundation-runtime",
+            "Simulation-only running-work lifecycle changed",
+        )
+        .with_action(action_id.clone())
+        .with_details(
+            AuditDetails::new()
+                .with_field("simulation", AuditValue::Boolean(true))
+                .with_field("operation", AuditValue::Text(operation.into()))
+                .with_field("from", AuditValue::Text(before_label.into()))
+                .with_field("to", AuditValue::Text(after.as_str().into()))
+                .with_field(
+                    "changed",
+                    AuditValue::Boolean(before.is_none_or(|state| state != after)),
+                )
+                .with_field(
+                    "runtime_mode",
+                    AuditValue::Text(self.runtime.mode().as_str().into()),
+                )
+                .with_field("terminal", AuditValue::Boolean(after.is_terminal()))
+                .with_field(
+                    "cooperation_pending",
+                    AuditValue::Boolean(after.cooperation_pending()),
+                ),
+        );
+
+        match self.audit.append(record) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
     }
 
     fn emit_diagnostic(
@@ -956,6 +1081,131 @@ mod tests {
             runtime.mock_work_state(&action_id),
             Some(MockRunningWorkState::StoppedAfterCancellation)
         );
+    }
+
+    #[test]
+    fn mock_work_snapshot_reports_runtime_and_cooperation_state() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let action_id = ActionId::new("work-snapshot");
+
+        runtime
+            .start_mock_work(action_id.clone())
+            .expect("Normal mode should permit mock work");
+
+        runtime.enter_game_mode();
+
+        assert_eq!(
+            runtime.mock_work_snapshot(&action_id),
+            Some(MockWorkLifecycleSnapshot {
+                action_id: action_id.clone(),
+                state: MockRunningWorkState::PauseRequested,
+                runtime_mode: RuntimeMode::GameMode,
+                terminal: false,
+                cooperation_pending: true,
+            })
+        );
+
+        runtime
+            .confirm_mock_work_game_mode_pause(&action_id)
+            .expect("pause acknowledgement should succeed");
+
+        let paused = runtime
+            .mock_work_snapshot(&action_id)
+            .expect("tracked work should have a snapshot");
+
+        assert_eq!(paused.state, MockRunningWorkState::PausedForGameMode);
+        assert!(!paused.terminal);
+        assert!(!paused.cooperation_pending);
+    }
+
+    #[test]
+    fn mock_work_lifecycle_audit_is_explicitly_simulation_only() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let action_id = ActionId::new("work-audit");
+
+        runtime
+            .start_mock_work(action_id.clone())
+            .expect("Normal mode should permit mock work");
+
+        let start = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("mock work start should be audited");
+
+        assert_eq!(start.kind, AuditEventKind::SimulationWorkLifecycleChanged);
+        assert_eq!(start.action_id.as_ref(), Some(&action_id));
+        assert_eq!(
+            start.details.get("simulation"),
+            Some(&AuditValue::Boolean(true))
+        );
+        assert_eq!(
+            start.details.get("operation"),
+            Some(&AuditValue::Text("start".into()))
+        );
+        assert_eq!(
+            start.details.get("from"),
+            Some(&AuditValue::Text("untracked".into()))
+        );
+        assert_eq!(
+            start.details.get("to"),
+            Some(&AuditValue::Text("running".into()))
+        );
+        assert_eq!(
+            start.details.get("runtime_mode"),
+            Some(&AuditValue::Text("normal".into()))
+        );
+
+        runtime.enter_game_mode();
+        runtime
+            .confirm_mock_work_game_mode_pause(&action_id)
+            .expect("pause acknowledgement should succeed");
+
+        let pause = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("pause acknowledgement should be audited");
+
+        assert_eq!(pause.kind, AuditEventKind::SimulationWorkLifecycleChanged);
+        assert_eq!(
+            pause.details.get("operation"),
+            Some(&AuditValue::Text("confirm_game_mode_pause".into()))
+        );
+        assert_eq!(
+            pause.details.get("from"),
+            Some(&AuditValue::Text("pause_requested".into()))
+        );
+        assert_eq!(
+            pause.details.get("to"),
+            Some(&AuditValue::Text("paused_for_game_mode".into()))
+        );
+
+        assert!(runtime.audit_log().records().iter().all(|record| !matches!(
+            record.kind,
+            AuditEventKind::ActionExecutionAttempted | AuditEventKind::ActionExecutionCompleted
+        )));
+    }
+
+    #[test]
+    fn failed_mock_work_transition_does_not_claim_lifecycle_change() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let action_id = ActionId::new("work-invalid-transition");
+
+        runtime
+            .start_mock_work(action_id.clone())
+            .expect("Normal mode should permit mock work");
+
+        let before = runtime.audit_log().len();
+
+        assert_eq!(
+            runtime.confirm_mock_work_cancellation(&action_id),
+            Err(MockWorkError::Transition(
+                MockRunningWorkTransitionError::CancellationNotRequested
+            ))
+        );
+
+        assert_eq!(runtime.audit_log().len(), before);
     }
 
     #[test]

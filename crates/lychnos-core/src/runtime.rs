@@ -21,6 +21,16 @@ pub enum RuntimeMode {
 }
 
 impl RuntimeMode {
+    /// Stable machine-readable label used by reporting and audit details.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::GameMode => "game_mode",
+            Self::Disabled => "disabled",
+        }
+    }
+
     /// Returns whether Lychnos may perform actions in this mode.
     #[must_use]
     pub const fn actions_allowed(self) -> bool {
