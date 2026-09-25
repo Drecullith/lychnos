@@ -14,6 +14,7 @@ pub mod memory;
 pub mod orchestrator;
 pub mod permission;
 pub mod providers;
+pub mod resource;
 pub mod runtime;
 pub mod scenario;
 
