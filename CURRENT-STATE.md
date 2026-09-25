@@ -375,6 +375,25 @@ Mock event
 
 Tests prove that Game Mode and Disabled mode block the flow at the authorization boundary.
 
+### Deterministic multi-step scenario runner
+
+Implemented:
+
+- machine-independent `scenario` module
+- ordered `ScenarioStep` operations
+- collection steps against an existing collector
+- runtime transition steps for Game Mode, Disabled, and explicit return to Normal
+- one continuous `FoundationRuntime` across the entire scenario
+- step-level collection failures that do not abort later scenario steps
+- boxed foundation-cycle results to keep the result enum compact
+- preservation of runtime mode, diagnostics, audit history, and collector queue position across steps
+- deterministic proof that Game Mode pauses collection without consuming queued events
+- deterministic proof that Disabled persists until explicit enable
+- deterministic proof that a scenario can continue and recover after an injected collector failure
+- accumulated runtime-transition audit history across a scenario
+
+The scenario layer is simulation orchestration only. It does not bypass runtime safety, permission checks, approval boundaries, or security auditing.
+
 ### CLI foundation simulation
 
 The `lychnos-cli` executable now drives the same machine-independent foundation pipeline from the terminal.
@@ -418,7 +437,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-97
+101
 ```
 
 Current quality gate:
@@ -464,6 +483,7 @@ Accepted ADRs currently cover:
 0023 Typed configuration runtime consumption
 0024 Runtime diagnostics integration
 0025 Deterministic collector failure scenarios
+0026 Deterministic multi-step scenarios
 ```
 
 ## Intentionally Mocked
@@ -549,7 +569,7 @@ Immediate next work should remain machine-independent and simulation-first.
 Likely next steps:
 
 1. define system-driven cancellation semantics separately from explicit user rejection
-2. expand deterministic simulation into richer multi-event scenarios
+2. extend deterministic scenarios with approval/rejection lifecycle steps where useful
 3. define cancellation semantics for already-running work before any real executor exists
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
