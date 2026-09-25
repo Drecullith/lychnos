@@ -102,6 +102,124 @@ impl MockRunningWorkState {
     }
 }
 
+/// Runtime cooperation request being assessed in deterministic simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockWorkCooperationRequest {
+    GameModePause,
+    DisabledCancellation,
+}
+
+impl MockWorkCooperationRequest {
+    /// Stable machine-readable request label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GameModePause => "game_mode_pause",
+            Self::DisabledCancellation => "disabled_cancellation",
+        }
+    }
+}
+
+/// Result of assessing executor cooperation against a caller-supplied elapsed
+/// time and timeout budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockWorkCooperationStatus {
+    /// The request is active and still within its cooperation window.
+    Waiting,
+    /// The request is still active after its cooperation window expired.
+    TimedOut,
+    /// The simulated executor acknowledged the requested state.
+    Satisfied,
+    /// The simulated executor reported that Disabled cancellation is not
+    /// available for this work.
+    Unavailable,
+    /// Disabled replaced the softer Game Mode pause request.
+    SupersededByDisabled,
+    /// Work completed before the requested cooperation outcome was observed.
+    CompletedBeforeCooperation,
+    /// The supplied request does not currently apply to the work state.
+    NotRequested,
+}
+
+/// Deterministic assessment of a running-work cooperation window.
+///
+/// The caller supplies elapsed time explicitly. This intentionally avoids
+/// selecting a timer, async runtime, or scheduling implementation in Phase 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MockWorkCooperationAssessment {
+    pub request: MockWorkCooperationRequest,
+    pub state: MockRunningWorkState,
+    pub elapsed_ms: u64,
+    pub timeout_ms: u64,
+    pub status: MockWorkCooperationStatus,
+}
+
+impl MockWorkCooperationAssessment {
+    /// Evaluates one state against a deterministic cooperation window.
+    #[must_use]
+    pub const fn evaluate(
+        request: MockWorkCooperationRequest,
+        state: MockRunningWorkState,
+        elapsed_ms: u64,
+        timeout_ms: u64,
+    ) -> Self {
+        let pending_timed_out = elapsed_ms >= timeout_ms;
+
+        let status = match request {
+            MockWorkCooperationRequest::GameModePause => match state {
+                MockRunningWorkState::PauseRequested => {
+                    if pending_timed_out {
+                        MockWorkCooperationStatus::TimedOut
+                    } else {
+                        MockWorkCooperationStatus::Waiting
+                    }
+                }
+                MockRunningWorkState::PausedForGameMode => MockWorkCooperationStatus::Satisfied,
+                MockRunningWorkState::CancellationRequested
+                | MockRunningWorkState::CancellationUnavailable
+                | MockRunningWorkState::StoppedAfterCancellation => {
+                    MockWorkCooperationStatus::SupersededByDisabled
+                }
+                MockRunningWorkState::Completed => {
+                    MockWorkCooperationStatus::CompletedBeforeCooperation
+                }
+                MockRunningWorkState::Running => MockWorkCooperationStatus::NotRequested,
+            },
+            MockWorkCooperationRequest::DisabledCancellation => match state {
+                MockRunningWorkState::CancellationRequested => {
+                    if pending_timed_out {
+                        MockWorkCooperationStatus::TimedOut
+                    } else {
+                        MockWorkCooperationStatus::Waiting
+                    }
+                }
+                MockRunningWorkState::StoppedAfterCancellation => {
+                    MockWorkCooperationStatus::Satisfied
+                }
+                MockRunningWorkState::CancellationUnavailable => {
+                    MockWorkCooperationStatus::Unavailable
+                }
+                MockRunningWorkState::Completed => {
+                    MockWorkCooperationStatus::CompletedBeforeCooperation
+                }
+                MockRunningWorkState::Running
+                | MockRunningWorkState::PauseRequested
+                | MockRunningWorkState::PausedForGameMode => {
+                    MockWorkCooperationStatus::NotRequested
+                }
+            },
+        };
+
+        Self {
+            request,
+            state,
+            elapsed_ms,
+            timeout_ms,
+            status,
+        }
+    }
+}
+
 /// Invalid simulated running-work lifecycle transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockRunningWorkTransitionError {
@@ -891,6 +1009,70 @@ mod tests {
         work.complete()
             .expect("uncancellable work may still later complete normally");
         assert_eq!(work.state(), MockRunningWorkState::Completed);
+    }
+
+    #[test]
+    fn cooperation_assessment_distinguishes_waiting_timeout_and_satisfied() {
+        let waiting = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::GameModePause,
+            MockRunningWorkState::PauseRequested,
+            50,
+            100,
+        );
+        assert_eq!(waiting.status, MockWorkCooperationStatus::Waiting);
+
+        let timed_out = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::GameModePause,
+            MockRunningWorkState::PauseRequested,
+            100,
+            100,
+        );
+        assert_eq!(timed_out.status, MockWorkCooperationStatus::TimedOut);
+
+        let satisfied = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::GameModePause,
+            MockRunningWorkState::PausedForGameMode,
+            250,
+            100,
+        );
+        assert_eq!(satisfied.status, MockWorkCooperationStatus::Satisfied);
+    }
+
+    #[test]
+    fn disabled_cooperation_assessment_reports_unavailable_and_completed_races() {
+        let unavailable = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::DisabledCancellation,
+            MockRunningWorkState::CancellationUnavailable,
+            250,
+            100,
+        );
+        assert_eq!(unavailable.status, MockWorkCooperationStatus::Unavailable);
+
+        let completed = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::DisabledCancellation,
+            MockRunningWorkState::Completed,
+            250,
+            100,
+        );
+        assert_eq!(
+            completed.status,
+            MockWorkCooperationStatus::CompletedBeforeCooperation
+        );
+    }
+
+    #[test]
+    fn disabled_supersedes_game_mode_cooperation_assessment() {
+        let assessment = MockWorkCooperationAssessment::evaluate(
+            MockWorkCooperationRequest::GameModePause,
+            MockRunningWorkState::CancellationRequested,
+            10,
+            100,
+        );
+
+        assert_eq!(
+            assessment.status,
+            MockWorkCooperationStatus::SupersededByDisabled
+        );
     }
 
     #[test]

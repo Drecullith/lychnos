@@ -7,7 +7,10 @@
 use crate::{
     action::{ActionId, ActionProposal},
     collector::Collector,
-    executor::{MockExecutionOutcome, MockRunningWorkState},
+    executor::{
+        MockExecutionOutcome, MockRunningWorkState, MockWorkCooperationAssessment,
+        MockWorkCooperationRequest,
+    },
     orchestrator::{
         CollectorCycleError, FoundationCycle, FoundationRuntime, MockWorkError,
         PendingActionCancellationReason, PendingActionError,
@@ -58,6 +61,17 @@ pub enum ScenarioStep {
     /// Confirm Disabled-mode cancellation for one work item.
     ConfirmMockWorkCancellation(ActionId),
 
+    /// Record that one work item cannot honor Disabled cancellation.
+    MarkMockWorkCancellationUnavailable(ActionId),
+
+    /// Assess one cooperation request against a deterministic timeout window.
+    AssessMockWorkCooperation {
+        action_id: ActionId,
+        request: MockWorkCooperationRequest,
+        elapsed_ms: u64,
+        timeout_ms: u64,
+    },
+
     /// Mark one simulation-only work item as completed.
     CompleteMockWork(ActionId),
 
@@ -94,6 +108,9 @@ pub enum ScenarioStepResult<E> {
 
     /// Current state of one simulation-only work item.
     MockWorkInspection(Option<MockRunningWorkState>),
+
+    /// Deterministic cooperation-window assessment for one work item.
+    MockWorkCooperation(Result<MockWorkCooperationAssessment, MockWorkError>),
 
     /// Result of one requested runtime-mode transition.
     RuntimeTransition(RuntimeTransition),
@@ -156,6 +173,19 @@ where
             ScenarioStep::ConfirmMockWorkCancellation(action_id) => {
                 ScenarioStepResult::MockWork(runtime.confirm_mock_work_cancellation(&action_id))
             }
+            ScenarioStep::MarkMockWorkCancellationUnavailable(action_id) => {
+                ScenarioStepResult::MockWork(
+                    runtime.mark_mock_work_cancellation_unavailable(&action_id),
+                )
+            }
+            ScenarioStep::AssessMockWorkCooperation {
+                action_id,
+                request,
+                elapsed_ms,
+                timeout_ms,
+            } => ScenarioStepResult::MockWorkCooperation(
+                runtime.assess_mock_work_cooperation(&action_id, request, elapsed_ms, timeout_ms),
+            ),
             ScenarioStep::CompleteMockWork(action_id) => {
                 ScenarioStepResult::MockWork(runtime.complete_mock_work(&action_id))
             }
@@ -181,7 +211,7 @@ mod tests {
             Event, EventId, EventKind, EventPayload, EventSource, EventTimestamp, Sensitivity,
             Severity,
         },
-        executor::MockExecutionOutcome,
+        executor::{MockExecutionOutcome, MockWorkCooperationStatus},
         providers::{FixedTimeProvider, SequenceIdProvider},
         runtime::RuntimeMode,
     };
@@ -631,5 +661,168 @@ mod tests {
 
         assert_eq!(runtime.mock_work_items_len(), 1);
         assert_eq!(runtime.mode(), RuntimeMode::Normal);
+    }
+
+    #[test]
+    fn scenario_models_delayed_game_mode_cooperation_and_timeout() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let action_id = ActionId::new("scenario-delayed-pause");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::StartMockWork(action_id.clone()),
+                ScenarioStep::EnterGameMode,
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id: action_id.clone(),
+                    request: MockWorkCooperationRequest::GameModePause,
+                    elapsed_ms: 40,
+                    timeout_ms: 100,
+                },
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id: action_id.clone(),
+                    request: MockWorkCooperationRequest::GameModePause,
+                    elapsed_ms: 100,
+                    timeout_ms: 100,
+                },
+                ScenarioStep::ConfirmMockWorkGameModePause(action_id.clone()),
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id,
+                    request: MockWorkCooperationRequest::GameModePause,
+                    elapsed_ms: 150,
+                    timeout_ms: 100,
+                },
+            ],
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(waiting)) = results[2] else {
+            panic!("expected waiting cooperation assessment");
+        };
+        assert_eq!(waiting.status, MockWorkCooperationStatus::Waiting);
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(timed_out)) = results[3] else {
+            panic!("expected timed-out cooperation assessment");
+        };
+        assert_eq!(timed_out.status, MockWorkCooperationStatus::TimedOut);
+
+        assert_eq!(
+            results[4],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::PausedForGameMode))
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(satisfied)) = results[5] else {
+            panic!("expected satisfied cooperation assessment");
+        };
+        assert_eq!(satisfied.status, MockWorkCooperationStatus::Satisfied);
+    }
+
+    #[test]
+    fn scenario_allows_late_disabled_cancellation_acknowledgement_after_timeout() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let action_id = ActionId::new("scenario-late-cancel");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::StartMockWork(action_id.clone()),
+                ScenarioStep::Disable,
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id: action_id.clone(),
+                    request: MockWorkCooperationRequest::DisabledCancellation,
+                    elapsed_ms: 250,
+                    timeout_ms: 100,
+                },
+                ScenarioStep::ConfirmMockWorkCancellation(action_id.clone()),
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id,
+                    request: MockWorkCooperationRequest::DisabledCancellation,
+                    elapsed_ms: 300,
+                    timeout_ms: 100,
+                },
+            ],
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(timed_out)) = results[2] else {
+            panic!("expected timed-out cancellation assessment");
+        };
+        assert_eq!(timed_out.status, MockWorkCooperationStatus::TimedOut);
+
+        assert_eq!(
+            results[3],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::StoppedAfterCancellation))
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(satisfied)) = results[4] else {
+            panic!("expected satisfied cancellation assessment");
+        };
+        assert_eq!(satisfied.status, MockWorkCooperationStatus::Satisfied);
+    }
+
+    #[test]
+    fn scenario_models_unavailable_cancellation_and_later_completion() {
+        let mut runtime = runtime();
+        let mut collector = ScriptedCollector::new();
+        let action_id = ActionId::new("scenario-unavailable-cancel");
+
+        let results = run_scenario(
+            &mut runtime,
+            &mut collector,
+            [
+                ScenarioStep::StartMockWork(action_id.clone()),
+                ScenarioStep::Disable,
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id: action_id.clone(),
+                    request: MockWorkCooperationRequest::DisabledCancellation,
+                    elapsed_ms: 20,
+                    timeout_ms: 100,
+                },
+                ScenarioStep::MarkMockWorkCancellationUnavailable(action_id.clone()),
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id: action_id.clone(),
+                    request: MockWorkCooperationRequest::DisabledCancellation,
+                    elapsed_ms: 150,
+                    timeout_ms: 100,
+                },
+                ScenarioStep::CompleteMockWork(action_id.clone()),
+                ScenarioStep::AssessMockWorkCooperation {
+                    action_id,
+                    request: MockWorkCooperationRequest::DisabledCancellation,
+                    elapsed_ms: 200,
+                    timeout_ms: 100,
+                },
+            ],
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(waiting)) = results[2] else {
+            panic!("expected waiting cancellation assessment");
+        };
+        assert_eq!(waiting.status, MockWorkCooperationStatus::Waiting);
+
+        assert_eq!(
+            results[3],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::CancellationUnavailable))
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(unavailable)) = results[4] else {
+            panic!("expected unavailable cancellation assessment");
+        };
+        assert_eq!(unavailable.status, MockWorkCooperationStatus::Unavailable);
+
+        assert_eq!(
+            results[5],
+            ScenarioStepResult::MockWork(Ok(MockRunningWorkState::Completed))
+        );
+
+        let ScenarioStepResult::MockWorkCooperation(Ok(completed)) = results[6] else {
+            panic!("expected completed-before-cooperation assessment");
+        };
+        assert_eq!(
+            completed.status,
+            MockWorkCooperationStatus::CompletedBeforeCooperation
+        );
     }
 }

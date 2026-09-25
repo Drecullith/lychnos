@@ -14,7 +14,7 @@ use crate::{
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{
         MockExecutionOutcome, MockExecutor, MockRunningWork, MockRunningWorkState,
-        MockRunningWorkTransitionError,
+        MockRunningWorkTransitionError, MockWorkCooperationAssessment, MockWorkCooperationRequest,
     },
     providers::{IdProvider, TimeProvider},
     runtime::{RuntimeController, RuntimeMode, RuntimeTransition, RuntimeWorkStartError},
@@ -282,6 +282,29 @@ where
             terminal: state.is_terminal(),
             cooperation_pending: state.cooperation_pending(),
         })
+    }
+
+    /// Assesses whether one runtime cooperation request is still waiting,
+    /// timed out, satisfied, unavailable, or no longer applicable.
+    ///
+    /// Elapsed time is supplied by the caller so this machine-independent
+    /// boundary does not choose a timer or async runtime.
+    pub fn assess_mock_work_cooperation(
+        &self,
+        action_id: &ActionId,
+        request: MockWorkCooperationRequest,
+        elapsed_ms: u64,
+        timeout_ms: u64,
+    ) -> Result<MockWorkCooperationAssessment, MockWorkError> {
+        let state = self
+            .mock_work_state(action_id)
+            .ok_or_else(|| MockWorkError::NotTracked {
+                action_id: action_id.clone(),
+            })?;
+
+        Ok(MockWorkCooperationAssessment::evaluate(
+            request, state, elapsed_ms, timeout_ms,
+        ))
     }
 
     /// Returns the number of simulation-only work items retained for lifecycle
