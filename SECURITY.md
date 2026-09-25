@@ -293,7 +293,7 @@ These are deferred boundaries, not silently assumed protections.
 
 Before Lychnos gains meaningful host authority, the project will need to address:
 
-- cancellation of already-running work on disable
+- real-executor cooperation, acknowledgement, timeout, and escalation for already-running work on Game Mode/Disabled transitions
 - bounded queues and resource exhaustion
 - hostile collector input
 - persistent audit integrity

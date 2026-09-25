@@ -1,6 +1,6 @@
 # ADR-0029: Disabled-Mode Cancellation Leases for Running Work
 
-Status: Accepted
+Status: Accepted (refined by ADR-0030 and ADR-0031)
 
 ## Context
 
@@ -100,3 +100,9 @@ This boundary does not yet provide:
 - Game Mode semantics for already-running work.
 
 Those remain later Phase 2 boundaries before real execution is introduced.
+
+## Subsequent Refinements
+
+ADR-0030 adds explicit completion, cancellation-unavailable, and cancellation-acknowledgement semantics.
+
+ADR-0031 defines already-running Game Mode behavior as a reversible pause request with explicit pause acknowledgement and resume, while preserving Disabled cancellation precedence.

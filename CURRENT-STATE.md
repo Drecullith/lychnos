@@ -183,7 +183,10 @@ Implemented:
 - `AwaitingUserApproval`
 - `Blocked`
 - simulation-only `MockRunningWork` representation for already-started work
-- observable running-work states `Running` and `CancellationRequested`
+- observable running-work states `Running`, `PauseRequested`, `PausedForGameMode`, `CancellationRequested`, `CancellationUnavailable`, `Completed`, and `StoppedAfterCancellation`
+- explicit executor-owned acknowledgement for Game Mode pause and Disabled cancellation
+- explicit resume after Game Mode; paused work never silently resumes
+- completion-after-cancellation-request race represented separately from confirmed cancellation
 - Disabled-mode cancellation is modeled without shell commands, process control, file writes, or other host effects
 
 ### Bound action approval flow
@@ -259,7 +262,7 @@ Implemented:
 
 Pending-action cancellation remains separate from cancellation of already-started work.
 
-Already-started work now has a separate machine-independent cancellation-lease boundary: entering Disabled permanently invalidates leases issued before that transition, and later re-enabling Normal does not resurrect the old work. This is still a cancellation request only; real executor acknowledgement, process/task termination, completion state, timeout handling, and rollback semantics are not implemented.
+Already-started work now has a separate machine-independent runtime-lease boundary. Game Mode produces a reversible pause request; Disabled permanently invalidates older leases and produces an irreversible cancellation request. The simulation distinguishes requested, acknowledged, unavailable, completed, paused, resumed, and stopped-after-cancellation states. `FoundationRuntime` can retain mock work by action ID so deterministic scenarios can exercise the full lifecycle across runtime transitions. No operating-system task is started or stopped by this prototype, and real executor cooperation, timeout/escalation handling, persistence, and rollback semantics are still not implemented.
 
 ### Security audit model
 
@@ -477,7 +480,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-117
+133
 ```
 
 Current quality gate:
@@ -527,6 +530,9 @@ Accepted ADRs currently cover:
 0027 System-driven pending action cancellation
 0028 Pending action lifecycle scenarios
 0029 Disabled-mode cancellation leases for running work
+0030 Running-work lifecycle acknowledgement
+0031 Game Mode running-work pause semantics
+0032 Tracked mock running-work scenarios
 ```
 
 ## Intentionally Mocked
@@ -565,8 +571,9 @@ Lychnos does **not** currently have:
 - persistent audit storage
 - portable-device synchronization
 - automatic Game Mode detection
-- Game Mode policy for already-running work
-- running-work cancellation acknowledgement/completion contract
+- real executor cooperation with pause/cancellation requests
+- running-work timeout and escalation policy
+- real execution lifecycle auditing and persistence
 - gaming/streaming coexistence measurements
 - anti-cheat coexistence testing
 
@@ -582,7 +589,7 @@ Runtime safety is checked at the permission and mock-execution boundary.
 
 A future real executor must re-check runtime state immediately before actual execution.
 
-Disabled now also exposes a latched cancellation request to work that already began under an older runtime generation. This does not yet mean cancellation has completed, that an operating-system task has stopped, or that prior side effects were rolled back.
+Game Mode now exposes a reversible pause request to already-started simulated work, while Disabled exposes a latched cancellation request to work that began under an older runtime generation. The mock lifecycle can acknowledge those requests, but this acknowledgement is simulation state only: it does not mean an operating-system task actually paused or stopped, and it does not imply prior side effects were rolled back.
 
 ## Open Architectural Decisions
 
@@ -615,9 +622,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. define the running-work completion/acknowledgement contract so cancellation requested is clearly distinct from cancellation confirmed, completed, or non-cancellable work
-2. decide Game Mode semantics for work that is already running without weakening the harder Disabled boundary
-3. continue strengthening prototype lifecycle and failure behavior before real adapters, then identify the next machine-independent boundary needed before Phase 3 host integration
+1. define machine-independent reporting/audit semantics for tracked execution lifecycle without implying that mock state is real host execution
+2. add deterministic timeout, delayed-cooperation, and failure scenarios around pause/cancellation handling
+3. introduce resource-budget instrumentation abstractions for later Game Mode and gaming/streaming coexistence measurements before Phase 3 host integration
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
