@@ -24,6 +24,28 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 
 The current codebase is still in the machine-independent foundation phase. Real Omarchy monitoring, AI-provider integration, voice, and system execution are intentionally deferred until the core safety boundaries are stable.
 
+## Omarchy development install
+
+On an Omarchy machine, install the current desktop shell with:
+
+```bash
+./scripts/install-omarchy.sh
+```
+
+The installer builds the shell, installs its assets and Omarchy bar integration into user-owned locations, adds a desktop launcher, and installs the `lychnos` command.
+
+After installation:
+
+```bash
+lychnos
+lychnos status
+lychnos stop
+lychnos restart
+lychnos logs
+```
+
+Running `lychnos` with no arguments launches Lychnos or restores the existing shell.
+
 ## License
 
 Lychnos is dual-licensed under either of:

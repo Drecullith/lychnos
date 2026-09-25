@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_ID="org.lychnos.prototype.shell"
+LIB_DIR="${LYCHNOS_LIB_DIR:-$HOME/.local/lib/lychnos}"
+SHELL_BIN="$LIB_DIR/lychnos-shell"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+LOG_DIR="$STATE_HOME/lychnos"
+LOG_FILE="$LOG_DIR/shell.log"
+
+is_running() {
+  pgrep -u "$UID" -f "^$SHELL_BIN$" >/dev/null 2>&1
+}
+
+import_graphical_env() {
+  if [[ -n "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    return
+  fi
+
+  local pid
+  pid="$(pgrep -u "$UID" -x quickshell | head -n 1 || true)"
+  [[ -n "$pid" && -r "/proc/$pid/environ" ]] || return
+
+  while IFS='=' read -r key value; do
+    case "$key" in
+      WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|HYPRLAND_INSTANCE_SIGNATURE)
+        export "$key=$value"
+        ;;
+    esac
+  done < <(tr '\0' '\n' <"/proc/$pid/environ")
+}
+
+start_shell() {
+  import_graphical_env
+
+  if is_running; then
+    gapplication action "$APP_ID" restore >/dev/null 2>&1 || true
+    echo "Lychnos is already running; restored the shell."
+    return
+  fi
+
+  if [[ ! -x "$SHELL_BIN" ]]; then
+    echo "Lychnos is not installed at $SHELL_BIN" >&2
+    exit 1
+  fi
+
+  mkdir -p "$LOG_DIR"
+  nohup "$SHELL_BIN" >>"$LOG_FILE" 2>&1 &
+  local pid=$!
+  for _ in {1..30}; do
+    if is_running; then
+      echo "Lychnos started (PID $pid)."
+      return
+    fi
+    sleep 0.1
+  done
+
+  echo "Lychnos did not stay running. Check: $LOG_FILE" >&2
+  exit 1
+}
+
+stop_shell() {
+  if ! is_running; then
+    echo "Lychnos is not running."
+    return
+  fi
+  pkill -TERM -u "$UID" -f "^$SHELL_BIN$"
+  echo "Lychnos stopped."
+}
+
+status_shell() {
+  if is_running; then
+    echo "Lychnos is running."
+  else
+    echo "Lychnos is stopped."
+    return 1
+  fi
+}
+
+case "${1:-start}" in
+  start|launch|show) start_shell ;;
+  stop|close) stop_shell ;;
+  restart)
+    stop_shell || true
+    start_shell
+    ;;
+  status) status_shell ;;
+  logs)
+    mkdir -p "$LOG_DIR"
+    touch "$LOG_FILE"
+    tail -n 80 "$LOG_FILE"
+    ;;
+  help|-h|--help)
+    cat <<'EOF'
+Usage: lychnos [command]
+
+Commands:
+  start     Launch Lychnos or restore him if already running
+  stop      Close Lychnos
+  restart   Restart Lychnos
+  status    Show whether Lychnos is running
+  logs      Show recent shell logs
+  help      Show this help
+
+Running 'lychnos' with no command is the same as 'lychnos start'.
+EOF
+    ;;
+  *)
+    echo "Unknown command: $1" >&2
+    echo "Run 'lychnos help' for usage." >&2
+    exit 2
+    ;;
+esac

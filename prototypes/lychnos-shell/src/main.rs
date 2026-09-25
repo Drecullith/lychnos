@@ -621,6 +621,29 @@ fn save_shell_position(top: i32, right: i32) {
     let _ = fs::write(path, format!("top={top}\nright={right}\n"));
 }
 
+fn canonical_body_asset_path() -> PathBuf {
+    if let Ok(data_dir) = std::env::var("LYCHNOS_DATA_DIR") {
+        let path = PathBuf::from(data_dir).join("assets/lychnos-body-v1.png");
+        if path.exists() {
+            return path;
+        }
+    }
+
+    let installed = if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+        Some(PathBuf::from(data_home).join("lychnos/assets/lychnos-body-v1.png"))
+    } else {
+        std::env::var("HOME")
+            .ok()
+            .map(|home| PathBuf::from(home).join(".local/share/lychnos/assets/lychnos-body-v1.png"))
+    };
+
+    if let Some(path) = installed.filter(|path| path.exists()) {
+        return path;
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/canon/lychnos-body-v1.png")
+}
+
 fn build_body(
     state: Rc<RefCell<CompanionPresentationState>>,
     dragging: Rc<Cell<bool>>,
@@ -632,10 +655,13 @@ fn build_body(
         "Drag to move · double-click status · right-click options",
     ));
 
-    let asset_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/canon/lychnos-body-v1.png");
-    let pixbuf =
-        gtk::gdk_pixbuf::Pixbuf::from_file(asset_path).expect("canonical Lychnos PNG should load");
+    let asset_path = canonical_body_asset_path();
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file(&asset_path).unwrap_or_else(|error| {
+        panic!(
+            "canonical Lychnos PNG should load from {}: {error}",
+            asset_path.display()
+        )
+    });
     let pixbuf = pixbuf
         .scale_simple(164, 164, gtk::gdk_pixbuf::InterpType::Bilinear)
         .expect("canonical Lychnos PNG should scale");

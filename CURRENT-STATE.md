@@ -375,6 +375,10 @@ Implemented:
 - restart-safe shell preferences for status visibility, Ghost Mode opacity, position lock, and minimized/visible presence
 - true click-through Ghost Mode using an empty GDK input region
 - Omarchy top-bar recovery integration for both minimized and Ghost Mode states under `integrations/omarchy/bar/`
+- user-level Omarchy installer that builds and installs the shell without sudo
+- installed `lychnos` launcher command with start, stop, restart, status, and logs
+- desktop application entry and repo-independent installed body/bar assets
+- launcher recovery of the active Wayland session environment for remote/non-graphical parent shells
 - lightweight idle float/pulse animation
 - no executor, approval grant, runtime controller, or host-action authority in the shell
 

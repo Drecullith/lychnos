@@ -55,11 +55,20 @@ Check the prototype with:
 cargo check --manifest-path prototypes/lychnos-shell/Cargo.toml
 ```
 
-Launch it from the graphical Hyprland session with:
+For repository development, launch it from the graphical Hyprland session with:
 
 ```bash
 cargo run --manifest-path prototypes/lychnos-shell/Cargo.toml
 ```
+
+For a normal user-level Omarchy install, use:
+
+```bash
+./scripts/install-omarchy.sh
+lychnos
+```
+
+The installed shell no longer depends on the Git checkout for its body asset or top-bar restore widget. The installer also creates an application entry named **Lychnos**.
 
 ## Prototype interaction
 
