@@ -170,6 +170,10 @@ where
         &mut self,
         collector: &mut C,
     ) -> Result<Option<FoundationCycle>, CollectorCycleError<C::Error>> {
+        if !self.runtime.background_work_allowed() {
+            return Ok(None);
+        }
+
         let event = collector
             .collect()
             .map_err(CollectorCycleError::Collector)?;
@@ -504,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_runtime_blocks_collector_sourced_event() {
+    fn disabled_runtime_does_not_poll_collector() {
         let mut runtime = runtime(RuntimeMode::Disabled);
 
         let event = Event {
@@ -522,18 +526,72 @@ mod tests {
 
         let cycle = runtime
             .collect_once(&mut collector)
-            .expect("mock collection should succeed")
-            .expect("collector should produce one cycle");
+            .expect("suppressed collection should not fail");
 
-        assert_eq!(
-            cycle.outcome,
-            MockExecutionOutcome::Blocked {
-                action_id: ActionId::new("action-for-collector-event-disabled"),
-                reason: DenialReason::Disabled,
-            }
+        assert!(cycle.is_none());
+        assert_eq!(collector.pending_len(), 1);
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn game_mode_does_not_poll_collector() {
+        let mut runtime = runtime(RuntimeMode::GameMode);
+
+        let event = Event {
+            id: EventId::new("collector-event-game"),
+            occurred_at: EventTimestamp::from_unix_millis(666),
+            source: EventSource::new("mock-collector"),
+            kind: EventKind::new("collector.test"),
+            severity: Severity::Info,
+            sensitivity: Sensitivity::Standard,
+            correlation_id: None,
+            payload: EventPayload::new(),
+        };
+
+        let mut collector = MockCollector::from_events([event]);
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("suppressed collection should not fail");
+
+        assert!(cycle.is_none());
+        assert_eq!(collector.pending_len(), 1);
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn collector_resumes_after_explicit_reenable() {
+        let mut runtime = runtime(RuntimeMode::Disabled);
+
+        let event = Event {
+            id: EventId::new("collector-event-resumed"),
+            occurred_at: EventTimestamp::from_unix_millis(777),
+            source: EventSource::new("mock-collector"),
+            kind: EventKind::new("collector.test"),
+            severity: Severity::Info,
+            sensitivity: Sensitivity::Standard,
+            correlation_id: None,
+            payload: EventPayload::new(),
+        };
+
+        let mut collector = MockCollector::from_events([event]);
+
+        assert!(
+            runtime
+                .collect_once(&mut collector)
+                .expect("suppressed collection should not fail")
+                .is_none()
         );
 
-        assert_eq!(cycle.audit_records, 1);
+        runtime.enable_normal();
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("collection should succeed after re-enable")
+            .expect("queued event should now be processed");
+
+        assert_eq!(cycle.event.id.as_str(), "collector-event-resumed");
+        assert!(collector.is_empty());
     }
 
     #[test]
