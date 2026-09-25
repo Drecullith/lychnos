@@ -70,6 +70,22 @@ Implemented:
 - correlation IDs
 - structured payloads
 
+### Collector boundary
+
+Implemented:
+
+- generic `Collector` interface
+- normalized-event handoff into the core
+- explicit no-event state through `Ok(None)`
+- collector-specific error propagation
+- deterministic FIFO `MockCollector`
+- `FoundationRuntime::collect_once(...)`
+- separate collector and runtime failures through `CollectorCycleError<E>`
+- end-to-end collector -> runtime -> analyzer -> safety -> permission -> audit tests
+- proof that Disabled mode blocks collector-sourced actions
+
+The collector abstraction is machine-independent. Real terminal, journal, systemd, hardware, and Omarchy-specific collectors are still intentionally deferred.
+
 ### Event bus
 
 Implemented:
@@ -283,7 +299,7 @@ This remains a safe simulation. The CLI does not execute real system actions.
 Current expected test count:
 
 ```text
-60
+66
 ```
 
 Current quality gate:
@@ -320,6 +336,7 @@ Accepted ADRs currently cover:
 0014 Foundation runtime orchestrator
 0015 Audited runtime mode transitions
 0016 Configuration loading boundary
+0017 Collector boundary and foundation pipeline
 ```
 
 ## Intentionally Mocked
@@ -331,7 +348,7 @@ The following currently exist only as machine-independent test implementations:
 - event bus transport
 - audit persistence
 - memory persistence
-- event sources
+- platform-specific collectors
 
 This is intentional.
 
@@ -404,8 +421,8 @@ Immediate next work should remain machine-independent.
 
 Likely next steps:
 
-1. introduce mock collectors
-2. expand canonical project documentation
+1. expand canonical project documentation
+2. review Phase 1 boundaries for anything still missing before real Omarchy integration
 
 Real Omarchy integration should begin only after these core boundaries are stable enough to connect safely.
 
