@@ -46,6 +46,7 @@ pub enum AuditEventKind {
     EventObserved,
     ActionProposed,
     ActionApproved,
+    ActionRejected,
     PermissionEvaluated,
     RuntimeModeChanged,
     ActionExecutionAttempted,

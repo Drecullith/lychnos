@@ -193,6 +193,69 @@ where
         Ok(outcome)
     }
 
+    /// Rejects one exact pending proposal.
+    ///
+    /// Rejection is not gated by runtime mode: a user must always be able to
+    /// refuse an action, including while Lychnos is in Game Mode or Disabled.
+    ///
+    /// The pending entry is removed before the audit record is appended so a
+    /// future audit-storage failure cannot undo the user's rejection.
+    pub fn reject_pending_action(
+        &mut self,
+        proposal: &ActionProposal,
+        rejected_by: impl Into<String>,
+    ) -> Result<(), PendingActionError> {
+        let Some(pending) = self.pending_actions.get(&proposal.id) else {
+            return Err(PendingActionError::NotPending {
+                action_id: proposal.id.clone(),
+            });
+        };
+
+        if pending != proposal {
+            return Err(PendingActionError::ProposalChanged {
+                action_id: proposal.id.clone(),
+            });
+        }
+
+        let pending = pending.clone();
+        let rejected_by = rejected_by.into();
+
+        self.pending_actions.remove(&pending.id);
+
+        let mut record = AuditRecord::new(
+            self.ids.next_audit_id(),
+            self.clock.audit_timestamp(),
+            AuditEventKind::ActionRejected,
+            rejected_by,
+            "Action proposal explicitly rejected",
+        )
+        .with_action(pending.id.clone())
+        .with_details(
+            AuditDetails::new()
+                .with_field(
+                    "action_kind",
+                    AuditValue::Text(pending.kind.as_str().into()),
+                )
+                .with_field(
+                    "capability",
+                    AuditValue::Text(pending.capability.as_str().into()),
+                )
+                .with_field("impact", AuditValue::Text(format!("{:?}", pending.impact)))
+                .with_field("risk", AuditValue::Text(format!("{:?}", pending.risk))),
+        );
+
+        if let Some(event_id) = &pending.source_event_id {
+            record = record.with_event(event_id.clone());
+        }
+
+        match self.audit.append(record) {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+
+        Ok(())
+    }
+
     /// Issues and audits one approval grant after the pending-action boundary
     /// has verified that the user is approving the exact stored proposal.
     #[must_use]
@@ -549,6 +612,141 @@ mod tests {
         );
 
         assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn exact_pending_rejection_removes_action_and_is_audited() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-rejected");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        runtime
+            .reject_pending_action(&proposal, "local-user")
+            .expect("exact pending proposal should be rejectable");
+
+        assert_eq!(runtime.pending_actions_len(), 0);
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let records = runtime.audit_log().records();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].kind, AuditEventKind::PermissionEvaluated);
+        assert_eq!(records[1].kind, AuditEventKind::ActionRejected);
+        assert_eq!(records[1].actor, "local-user");
+
+        assert_eq!(
+            records[1].action_id.as_ref().map(ActionId::as_str),
+            Some("action-rejected")
+        );
+
+        assert_eq!(
+            records[1].event_id.as_ref().map(EventId::as_str),
+            Some("event-for-action-rejected")
+        );
+
+        assert_eq!(
+            records[1].details.get("action_kind"),
+            Some(&AuditValue::Text("file.write".into()))
+        );
+    }
+
+    #[test]
+    fn stale_proposal_cannot_reject_replacement() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let original = state_changing_proposal("action-replaced");
+        assert!(matches!(
+            runtime.evaluate_proposal(&original),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let replacement = ActionProposal::new(
+            ActionId::new("action-replaced"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::High,
+            "Replacement proposal",
+            "test-analyzer",
+        )
+        .with_source_event(EventId::new("event-for-action-replaced"));
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&replacement),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        let error = runtime
+            .reject_pending_action(&original, "local-user")
+            .expect_err("stale proposal must not reject its replacement");
+
+        assert_eq!(
+            error,
+            PendingActionError::ProposalChanged {
+                action_id: ActionId::new("action-replaced"),
+            }
+        );
+
+        assert_eq!(runtime.pending_action(&original.id), Some(&replacement));
+
+        assert!(
+            runtime
+                .audit_log()
+                .records()
+                .iter()
+                .all(|record| record.kind != AuditEventKind::ActionRejected)
+        );
+    }
+
+    #[test]
+    fn unknown_proposal_cannot_be_rejected() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-never-pending");
+
+        let error = runtime
+            .reject_pending_action(&proposal, "local-user")
+            .expect_err("proposal was never pending");
+
+        assert_eq!(
+            error,
+            PendingActionError::NotPending {
+                action_id: ActionId::new("action-never-pending"),
+            }
+        );
+
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn rejection_remains_available_while_disabled() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-reject-disabled");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        runtime.disable();
+
+        runtime
+            .reject_pending_action(&proposal, "local-user")
+            .expect("Disabled must never prevent user rejection");
+
+        assert!(runtime.pending_action(&proposal.id).is_none());
+
+        let last = runtime
+            .audit_log()
+            .records()
+            .last()
+            .expect("rejection should be audited");
+
+        assert_eq!(last.kind, AuditEventKind::ActionRejected);
+        assert_eq!(last.actor, "local-user");
     }
 
     #[test]
