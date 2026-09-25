@@ -7,7 +7,7 @@ use crate::{
         AuditDetails, AuditEventKind, AuditId, AuditRecord, AuditSink, AuditTimestamp, AuditValue,
     },
     permission::{DefaultPermissionPolicy, DenialReason, PermissionDecision},
-    runtime::{RuntimeController, RuntimeWorkLease},
+    runtime::{RuntimeController, RuntimeWorkLease, RuntimeWorkRequest},
 };
 
 /// Result of passing an action through the mock execution boundary.
@@ -54,8 +54,13 @@ impl MockExecutionOutcome {
 /// Observable state of one already-started mock operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockRunningWorkState {
-    /// Work is active and no cancellation has been requested.
+    /// Work is active and no pause or cancellation has been requested.
     Running,
+    /// Game Mode requested cooperative pause/quiescence, but the simulated
+    /// executor has not acknowledged the pause yet.
+    PauseRequested,
+    /// The simulated executor acknowledged the Game Mode pause request.
+    PausedForGameMode,
     /// Disabled-mode safety requested cooperative cancellation, but the
     /// simulated executor has not confirmed that work stopped.
     CancellationRequested,
@@ -72,9 +77,21 @@ pub enum MockRunningWorkState {
 /// Invalid simulated running-work lifecycle transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MockRunningWorkTransitionError {
+    /// A Game Mode pause acknowledgement was attempted without a live pause
+    /// request.
+    PauseNotRequested,
+    /// Resume was attempted while Game Mode still requests a pause.
+    GameModePauseStillRequested,
+    /// Resume was attempted for work that was not paused.
+    NotPaused,
+    /// Disabled cancellation now takes precedence over the requested
+    /// transition.
+    CancellationRequested,
     /// A cancellation-specific transition was requested before runtime safety
     /// requested cancellation.
     CancellationNotRequested,
+    /// Work is paused and cannot complete until explicitly resumed.
+    WorkPaused,
     /// Work already reached a terminal state.
     AlreadyTerminal,
     /// The executor previously reported that cancellation cannot be honored.
@@ -84,6 +101,7 @@ pub enum MockRunningWorkTransitionError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MockRunningWorkLifecycle {
     Active,
+    PausedForGameMode,
     CancellationUnavailable,
     Completed,
     StoppedAfterCancellation,
@@ -131,11 +149,18 @@ impl MockRunningWork {
     #[must_use]
     pub fn state(&self) -> MockRunningWorkState {
         match self.lifecycle {
-            MockRunningWorkLifecycle::Active => {
-                if self.lease.cancellation_requested() {
+            MockRunningWorkLifecycle::Active => match self.lease.request() {
+                RuntimeWorkRequest::Continue => MockRunningWorkState::Running,
+                RuntimeWorkRequest::PauseForGameMode => MockRunningWorkState::PauseRequested,
+                RuntimeWorkRequest::CancelForDisabled => {
+                    MockRunningWorkState::CancellationRequested
+                }
+            },
+            MockRunningWorkLifecycle::PausedForGameMode => {
+                if self.lease.request() == RuntimeWorkRequest::CancelForDisabled {
                     MockRunningWorkState::CancellationRequested
                 } else {
-                    MockRunningWorkState::Running
+                    MockRunningWorkState::PausedForGameMode
                 }
             }
             MockRunningWorkLifecycle::CancellationUnavailable => {
@@ -144,6 +169,62 @@ impl MockRunningWork {
             MockRunningWorkLifecycle::Completed => MockRunningWorkState::Completed,
             MockRunningWorkLifecycle::StoppedAfterCancellation => {
                 MockRunningWorkState::StoppedAfterCancellation
+            }
+        }
+    }
+
+    /// Acknowledges a live Game Mode pause request.
+    ///
+    /// Pausing is cooperative and reversible. Returning the runtime to Normal
+    /// permits an explicit resume but does not silently resume already-paused
+    /// work.
+    pub fn confirm_game_mode_pause(&mut self) -> Result<(), MockRunningWorkTransitionError> {
+        match self.lifecycle {
+            MockRunningWorkLifecycle::Active => match self.lease.request() {
+                RuntimeWorkRequest::PauseForGameMode => {
+                    self.lifecycle = MockRunningWorkLifecycle::PausedForGameMode;
+                    Ok(())
+                }
+                RuntimeWorkRequest::CancelForDisabled => {
+                    Err(MockRunningWorkTransitionError::CancellationRequested)
+                }
+                RuntimeWorkRequest::Continue => {
+                    Err(MockRunningWorkTransitionError::PauseNotRequested)
+                }
+            },
+            MockRunningWorkLifecycle::PausedForGameMode => Ok(()),
+            MockRunningWorkLifecycle::CancellationUnavailable => {
+                Err(MockRunningWorkTransitionError::CancellationUnavailable)
+            }
+            MockRunningWorkLifecycle::Completed
+            | MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                Err(MockRunningWorkTransitionError::AlreadyTerminal)
+            }
+        }
+    }
+
+    /// Explicitly resumes work previously paused for Game Mode.
+    pub fn resume_after_game_mode(&mut self) -> Result<(), MockRunningWorkTransitionError> {
+        match self.lifecycle {
+            MockRunningWorkLifecycle::PausedForGameMode => match self.lease.request() {
+                RuntimeWorkRequest::Continue => {
+                    self.lifecycle = MockRunningWorkLifecycle::Active;
+                    Ok(())
+                }
+                RuntimeWorkRequest::PauseForGameMode => {
+                    Err(MockRunningWorkTransitionError::GameModePauseStillRequested)
+                }
+                RuntimeWorkRequest::CancelForDisabled => {
+                    Err(MockRunningWorkTransitionError::CancellationRequested)
+                }
+            },
+            MockRunningWorkLifecycle::Active => Err(MockRunningWorkTransitionError::NotPaused),
+            MockRunningWorkLifecycle::CancellationUnavailable => {
+                Err(MockRunningWorkTransitionError::CancellationUnavailable)
+            }
+            MockRunningWorkLifecycle::Completed
+            | MockRunningWorkLifecycle::StoppedAfterCancellation => {
+                Err(MockRunningWorkTransitionError::AlreadyTerminal)
             }
         }
     }
@@ -160,6 +241,9 @@ impl MockRunningWork {
                 self.lifecycle = MockRunningWorkLifecycle::Completed;
                 Ok(())
             }
+            MockRunningWorkLifecycle::PausedForGameMode => {
+                Err(MockRunningWorkTransitionError::WorkPaused)
+            }
             MockRunningWorkLifecycle::Completed
             | MockRunningWorkLifecycle::StoppedAfterCancellation => {
                 Err(MockRunningWorkTransitionError::AlreadyTerminal)
@@ -174,11 +258,13 @@ impl MockRunningWork {
     /// requests cancellation, while the executor owns acknowledgement.
     pub fn confirm_cancellation(&mut self) -> Result<(), MockRunningWorkTransitionError> {
         match self.lifecycle {
-            MockRunningWorkLifecycle::Active if self.lease.cancellation_requested() => {
+            MockRunningWorkLifecycle::Active | MockRunningWorkLifecycle::PausedForGameMode
+                if self.lease.cancellation_requested() =>
+            {
                 self.lifecycle = MockRunningWorkLifecycle::StoppedAfterCancellation;
                 Ok(())
             }
-            MockRunningWorkLifecycle::Active => {
+            MockRunningWorkLifecycle::Active | MockRunningWorkLifecycle::PausedForGameMode => {
                 Err(MockRunningWorkTransitionError::CancellationNotRequested)
             }
             MockRunningWorkLifecycle::CancellationUnavailable => {
@@ -195,11 +281,13 @@ impl MockRunningWork {
     /// cancellation request while work remains active.
     pub fn mark_cancellation_unavailable(&mut self) -> Result<(), MockRunningWorkTransitionError> {
         match self.lifecycle {
-            MockRunningWorkLifecycle::Active if self.lease.cancellation_requested() => {
+            MockRunningWorkLifecycle::Active | MockRunningWorkLifecycle::PausedForGameMode
+                if self.lease.cancellation_requested() =>
+            {
                 self.lifecycle = MockRunningWorkLifecycle::CancellationUnavailable;
                 Ok(())
             }
-            MockRunningWorkLifecycle::Active => {
+            MockRunningWorkLifecycle::Active | MockRunningWorkLifecycle::PausedForGameMode => {
                 Err(MockRunningWorkTransitionError::CancellationNotRequested)
             }
             MockRunningWorkLifecycle::CancellationUnavailable => Ok(()),
@@ -775,6 +863,97 @@ mod tests {
         work.complete()
             .expect("uncancellable work may still later complete normally");
         assert_eq!(work.state(), MockRunningWorkState::Completed);
+    }
+
+    #[test]
+    fn game_mode_pause_request_requires_executor_acknowledgement() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-game-pause"), lease);
+
+        runtime.enter_game_mode();
+
+        assert_eq!(work.state(), MockRunningWorkState::PauseRequested);
+
+        work.confirm_game_mode_pause()
+            .expect("executor may acknowledge a live Game Mode pause request");
+
+        assert_eq!(work.state(), MockRunningWorkState::PausedForGameMode);
+        assert_eq!(
+            work.complete(),
+            Err(MockRunningWorkTransitionError::WorkPaused)
+        );
+    }
+
+    #[test]
+    fn paused_work_requires_explicit_resume_after_game_mode() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-game-resume"), lease);
+
+        runtime.enter_game_mode();
+        work.confirm_game_mode_pause()
+            .expect("Game Mode pause should be acknowledged");
+
+        runtime.enable_normal();
+
+        assert_eq!(work.state(), MockRunningWorkState::PausedForGameMode);
+
+        work.resume_after_game_mode()
+            .expect("Normal mode permits explicit resume");
+
+        assert_eq!(work.state(), MockRunningWorkState::Running);
+    }
+
+    #[test]
+    fn paused_work_cannot_resume_while_game_mode_still_active() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-game-still"), lease);
+
+        runtime.enter_game_mode();
+        work.confirm_game_mode_pause()
+            .expect("Game Mode pause should be acknowledged");
+
+        assert_eq!(
+            work.resume_after_game_mode(),
+            Err(MockRunningWorkTransitionError::GameModePauseStillRequested)
+        );
+        assert_eq!(work.state(), MockRunningWorkState::PausedForGameMode);
+    }
+
+    #[test]
+    fn disabled_upgrades_paused_work_to_irreversible_cancellation() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+        let mut work = MockRunningWork::new(ActionId::new("running-game-disabled"), lease);
+
+        runtime.enter_game_mode();
+        work.confirm_game_mode_pause()
+            .expect("Game Mode pause should be acknowledged");
+
+        runtime.disable();
+
+        assert_eq!(work.state(), MockRunningWorkState::CancellationRequested);
+        assert_eq!(
+            work.resume_after_game_mode(),
+            Err(MockRunningWorkTransitionError::CancellationRequested)
+        );
+
+        work.confirm_cancellation()
+            .expect("Disabled cancellation should be confirmable from paused work");
+
+        runtime.enable_normal();
+
+        assert_eq!(work.state(), MockRunningWorkState::StoppedAfterCancellation);
     }
 
     #[test]
