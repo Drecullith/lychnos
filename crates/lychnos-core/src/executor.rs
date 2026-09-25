@@ -7,7 +7,7 @@ use crate::{
         AuditDetails, AuditEventKind, AuditId, AuditRecord, AuditSink, AuditTimestamp, AuditValue,
     },
     permission::{DefaultPermissionPolicy, DenialReason, PermissionDecision},
-    runtime::RuntimeController,
+    runtime::{RuntimeController, RuntimeWorkLease},
 };
 
 /// Result of passing an action through the mock execution boundary.
@@ -47,6 +47,53 @@ impl MockExecutionOutcome {
             Self::WouldExecute { .. } => "Action passed mock execution policy",
             Self::AwaitingUserApproval { .. } => "Action requires explicit user approval",
             Self::Blocked { .. } => "Action blocked by runtime safety policy",
+        }
+    }
+}
+
+/// Observable state of one already-started mock operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockRunningWorkState {
+    Running,
+    CancellationRequested,
+}
+
+/// Simulation-only representation of action work that has already started.
+///
+/// This type performs no operating-system action. It exists so Phase 2 can
+/// define cancellation semantics before a real executor is introduced.
+#[derive(Debug, Clone)]
+pub struct MockRunningWork {
+    action_id: ActionId,
+    lease: RuntimeWorkLease,
+}
+
+impl MockRunningWork {
+    /// Creates a simulation-only running-work representation from a
+    /// runtime-issued lease.
+    ///
+    /// This does not perform operating-system work or grant execution
+    /// authority. It only models the lifecycle of work that has already
+    /// started so cancellation behavior can be tested before a real executor
+    /// exists.
+    #[must_use]
+    pub fn new(action_id: ActionId, lease: RuntimeWorkLease) -> Self {
+        Self { action_id, lease }
+    }
+
+    /// Returns the associated action identifier.
+    #[must_use]
+    pub fn action_id(&self) -> &ActionId {
+        &self.action_id
+    }
+
+    /// Returns the current simulated running-work state.
+    #[must_use]
+    pub fn state(&self) -> MockRunningWorkState {
+        if self.lease.cancellation_requested() {
+            MockRunningWorkState::CancellationRequested
+        } else {
+            MockRunningWorkState::Running
         }
     }
 }
@@ -480,5 +527,62 @@ mod tests {
             audit.records()[0].details.get("decision"),
             Some(&AuditValue::Text("blocked_disabled".into()))
         );
+    }
+
+    #[test]
+    fn already_started_mock_work_observes_disable_cancellation() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+
+        let work = MockRunningWork::new(ActionId::new("running-001"), lease);
+
+        assert_eq!(work.action_id().as_str(), "running-001");
+        assert_eq!(work.state(), MockRunningWorkState::Running);
+
+        runtime.disable();
+
+        assert_eq!(work.state(), MockRunningWorkState::CancellationRequested);
+    }
+
+    #[test]
+    fn cancelled_mock_work_does_not_resume_after_reenable() {
+        let runtime = RuntimeController::default();
+        let lease = runtime
+            .try_begin_work()
+            .expect("Normal mode should permit simulated work start");
+
+        let work = MockRunningWork::new(ActionId::new("running-002"), lease);
+
+        runtime.disable();
+        runtime.enable_normal();
+
+        assert_eq!(runtime.mode(), crate::runtime::RuntimeMode::Normal);
+        assert_eq!(work.state(), MockRunningWorkState::CancellationRequested);
+    }
+
+    #[test]
+    fn new_mock_work_after_reenable_starts_uncancelled() {
+        let runtime = RuntimeController::default();
+
+        let old_lease = runtime
+            .try_begin_work()
+            .expect("first simulated work should start");
+        let old_work = MockRunningWork::new(ActionId::new("running-old"), old_lease);
+
+        runtime.disable();
+        runtime.enable_normal();
+
+        let new_lease = runtime
+            .try_begin_work()
+            .expect("new work should start after explicit re-enable");
+        let new_work = MockRunningWork::new(ActionId::new("running-new"), new_lease);
+
+        assert_eq!(
+            old_work.state(),
+            MockRunningWorkState::CancellationRequested
+        );
+        assert_eq!(new_work.state(), MockRunningWorkState::Running);
     }
 }

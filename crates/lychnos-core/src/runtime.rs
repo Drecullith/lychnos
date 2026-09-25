@@ -1,6 +1,9 @@
 //! Runtime safety state for Lychnos.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Current operating mode of the Lychnos runtime.
 #[repr(u8)]
@@ -61,10 +64,57 @@ impl RuntimeTransition {
     }
 }
 
+/// Work-start failure caused by the current runtime mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeWorkStartError {
+    GameMode,
+    Disabled,
+}
+
+/// Cancellation lease held by work that has already started.
+///
+/// A transition into Disabled permanently invalidates leases that were issued
+/// before that transition. Returning to Normal does not revive old work.
+///
+/// Game Mode cancellation/pause semantics for already-running work remain
+/// intentionally separate from this Phase 2 boundary.
+#[derive(Debug, Clone)]
+pub struct RuntimeWorkLease {
+    state: Arc<AtomicU64>,
+    disable_epoch: u64,
+}
+
+impl RuntimeWorkLease {
+    /// Returns whether the work represented by this lease must stop.
+    #[must_use]
+    pub fn cancellation_requested(&self) -> bool {
+        let state = self.state.load(Ordering::Acquire);
+
+        mode_from_state(state) == RuntimeMode::Disabled
+            || disable_epoch_from_state(state) != self.disable_epoch
+    }
+}
+
+const MODE_MASK: u64 = u8::MAX as u64;
+const DISABLE_EPOCH_SHIFT: u32 = 8;
+const DISABLE_EPOCH_MASK: u64 = u64::MAX >> DISABLE_EPOCH_SHIFT;
+
+fn encode_runtime_state(mode: RuntimeMode, disable_epoch: u64) -> u64 {
+    ((disable_epoch & DISABLE_EPOCH_MASK) << DISABLE_EPOCH_SHIFT) | mode as u64
+}
+
+fn mode_from_state(state: u64) -> RuntimeMode {
+    RuntimeMode::from_stored((state & MODE_MASK) as u8)
+}
+
+fn disable_epoch_from_state(state: u64) -> u64 {
+    state >> DISABLE_EPOCH_SHIFT
+}
+
 /// Thread-safe controller for Lychnos runtime safety state.
 #[derive(Debug)]
 pub struct RuntimeController {
-    mode: AtomicU8,
+    state: Arc<AtomicU64>,
 }
 
 impl Default for RuntimeController {
@@ -76,16 +126,16 @@ impl Default for RuntimeController {
 impl RuntimeController {
     /// Creates a runtime controller with the requested initial mode.
     #[must_use]
-    pub const fn new(initial_mode: RuntimeMode) -> Self {
+    pub fn new(initial_mode: RuntimeMode) -> Self {
         Self {
-            mode: AtomicU8::new(initial_mode as u8),
+            state: Arc::new(AtomicU64::new(encode_runtime_state(initial_mode, 0))),
         }
     }
 
     /// Returns the current runtime mode.
     #[must_use]
     pub fn mode(&self) -> RuntimeMode {
-        RuntimeMode::from_stored(self.mode.load(Ordering::Acquire))
+        mode_from_state(self.state.load(Ordering::Acquire))
     }
 
     /// Returns whether actions are currently allowed.
@@ -100,12 +150,31 @@ impl RuntimeController {
         self.mode().background_work_allowed()
     }
 
+    /// Issues a cancellation lease for work beginning in Normal mode.
+    ///
+    /// One atomic runtime snapshot binds the lease to the current disable
+    /// generation. A later Disabled transition invalidates that lease even if
+    /// the runtime subsequently returns to Normal.
+    pub fn try_begin_work(&self) -> Result<RuntimeWorkLease, RuntimeWorkStartError> {
+        let state = self.state.load(Ordering::Acquire);
+
+        match mode_from_state(state) {
+            RuntimeMode::Normal => Ok(RuntimeWorkLease {
+                state: Arc::clone(&self.state),
+                disable_epoch: disable_epoch_from_state(state),
+            }),
+            RuntimeMode::GameMode => Err(RuntimeWorkStartError::GameMode),
+            RuntimeMode::Disabled => Err(RuntimeWorkStartError::Disabled),
+        }
+    }
+
     /// Enters Game Mode unless Lychnos is already disabled.
     ///
     /// Disabled mode fails closed and cannot be weakened by this operation.
     pub fn enter_game_mode(&self) -> RuntimeTransition {
         loop {
-            let current = self.mode();
+            let state = self.state.load(Ordering::Acquire);
+            let current = mode_from_state(state);
 
             match current {
                 RuntimeMode::Disabled => {
@@ -117,14 +186,14 @@ impl RuntimeController {
                 }
 
                 RuntimeMode::Normal => {
+                    let next = encode_runtime_state(
+                        RuntimeMode::GameMode,
+                        disable_epoch_from_state(state),
+                    );
+
                     if self
-                        .mode
-                        .compare_exchange(
-                            RuntimeMode::Normal as u8,
-                            RuntimeMode::GameMode as u8,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
+                        .state
+                        .compare_exchange(state, next, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
                     {
                         return RuntimeTransition::new(RuntimeMode::Normal, RuntimeMode::GameMode);
@@ -135,24 +204,55 @@ impl RuntimeController {
     }
 
     /// Immediately places Lychnos into Disabled mode.
+    ///
+    /// A successful transition into Disabled also advances the disable epoch,
+    /// permanently requesting cancellation from work that started earlier.
     pub fn disable(&self) -> RuntimeTransition {
-        let previous = RuntimeMode::from_stored(
-            self.mode
-                .swap(RuntimeMode::Disabled as u8, Ordering::AcqRel),
-        );
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            let current = mode_from_state(state);
 
-        RuntimeTransition::new(previous, RuntimeMode::Disabled)
+            if current == RuntimeMode::Disabled {
+                return RuntimeTransition::new(RuntimeMode::Disabled, RuntimeMode::Disabled);
+            }
+
+            let next_epoch = disable_epoch_from_state(state).wrapping_add(1) & DISABLE_EPOCH_MASK;
+
+            let next = encode_runtime_state(RuntimeMode::Disabled, next_epoch);
+
+            if self
+                .state
+                .compare_exchange(state, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return RuntimeTransition::new(current, RuntimeMode::Disabled);
+            }
+        }
     }
 
     /// Explicitly enables normal Lychnos operation.
     ///
-    /// This is intentionally separate from ordinary mode changes so Disabled
-    /// cannot be left accidentally.
+    /// Re-enabling preserves the disable epoch, so work cancelled by an
+    /// earlier Disabled transition does not silently become live again.
     pub fn enable_normal(&self) -> RuntimeTransition {
-        let previous =
-            RuntimeMode::from_stored(self.mode.swap(RuntimeMode::Normal as u8, Ordering::AcqRel));
+        loop {
+            let state = self.state.load(Ordering::Acquire);
+            let current = mode_from_state(state);
 
-        RuntimeTransition::new(previous, RuntimeMode::Normal)
+            if current == RuntimeMode::Normal {
+                return RuntimeTransition::new(RuntimeMode::Normal, RuntimeMode::Normal);
+            }
+
+            let next = encode_runtime_state(RuntimeMode::Normal, disable_epoch_from_state(state));
+
+            if self
+                .state
+                .compare_exchange(state, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return RuntimeTransition::new(current, RuntimeMode::Normal);
+            }
+        }
     }
 }
 
@@ -263,5 +363,73 @@ mod tests {
         );
 
         assert_eq!(controller.mode(), RuntimeMode::Normal);
+    }
+
+    #[test]
+    fn work_can_begin_only_in_normal_mode() {
+        let normal = RuntimeController::new(RuntimeMode::Normal);
+        assert!(normal.try_begin_work().is_ok());
+
+        let game = RuntimeController::new(RuntimeMode::GameMode);
+        assert_eq!(
+            game.try_begin_work()
+                .expect_err("Game Mode must block new work"),
+            RuntimeWorkStartError::GameMode
+        );
+
+        let disabled = RuntimeController::new(RuntimeMode::Disabled);
+        assert_eq!(
+            disabled
+                .try_begin_work()
+                .expect_err("Disabled must block new work"),
+            RuntimeWorkStartError::Disabled
+        );
+    }
+
+    #[test]
+    fn disabling_requests_cancellation_for_existing_work() {
+        let controller = RuntimeController::default();
+        let lease = controller
+            .try_begin_work()
+            .expect("Normal mode should issue work lease");
+
+        assert!(!lease.cancellation_requested());
+
+        controller.disable();
+
+        assert!(lease.cancellation_requested());
+    }
+
+    #[test]
+    fn reenable_does_not_revive_cancelled_work() {
+        let controller = RuntimeController::default();
+        let lease = controller
+            .try_begin_work()
+            .expect("Normal mode should issue work lease");
+
+        controller.disable();
+        controller.enable_normal();
+
+        assert_eq!(controller.mode(), RuntimeMode::Normal);
+        assert!(lease.cancellation_requested());
+    }
+
+    #[test]
+    fn work_started_after_reenable_gets_fresh_lease() {
+        let controller = RuntimeController::default();
+
+        let old = controller
+            .try_begin_work()
+            .expect("first work lease should start");
+
+        controller.disable();
+        controller.enable_normal();
+
+        let fresh = controller
+            .try_begin_work()
+            .expect("new work may start after explicit re-enable");
+
+        assert!(old.cancellation_requested());
+        assert!(!fresh.cancellation_requested());
     }
 }
