@@ -11,13 +11,16 @@ SHELL_LOG="$LOG_DIR/shell.log"
 RUNTIME_LOG="$LOG_DIR/runtime.log"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 VOICE_ENV="$CONFIG_HOME/lychnos/voice.env"
+BRAIN_ENV="$CONFIG_HOME/lychnos/brain.env"
 
-if [[ -f "$VOICE_ENV" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$VOICE_ENV"
-  set +a
-fi
+for env_file in "$VOICE_ENV" "$BRAIN_ENV"; do
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+  fi
+done
 
 is_shell_running() {
   pgrep -u "$UID" -f "^$SHELL_BIN$" >/dev/null 2>&1
@@ -140,6 +143,18 @@ stop_all() {
   fi
 
   if is_runtime_running; then
+    local runtime_pid child_pid child_cmd
+    while read -r runtime_pid; do
+      [[ -n "$runtime_pid" ]] || continue
+      while read -r child_pid; do
+        [[ -n "$child_pid" ]] || continue
+        child_cmd="$(tr '\0' ' ' <"/proc/$child_pid/cmdline" 2>/dev/null || true)"
+        if [[ "$child_cmd" == *"/llama serve "* ]]; then
+          kill -TERM "$child_pid" 2>/dev/null || true
+        fi
+      done < <(pgrep -P "$runtime_pid" 2>/dev/null || true)
+    done < <(pgrep -u "$UID" -f "^$RUNTIME_BIN$" 2>/dev/null || true)
+
     pkill -TERM -u "$UID" -f "^$RUNTIME_BIN$"
     echo "Lychnos runtime stopped."
     stopped=true

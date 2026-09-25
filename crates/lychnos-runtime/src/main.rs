@@ -1,4 +1,5 @@
 mod audio;
+mod local_brain;
 mod stt;
 mod tts;
 
@@ -12,7 +13,7 @@ use std::{
 use lychnos_core::{
     interaction::{
         ConversationProvider, ConversationRequest, ConversationRequestEnvelope,
-        ConversationResponseEnvelope, InteractionId, InteractionSource, MockConversationProvider,
+        ConversationResponseEnvelope, InteractionId, InteractionSource,
     },
     orchestrator::FoundationRuntime,
     persona::PersonaProfile,
@@ -42,7 +43,7 @@ fn main() {
         SystemTimeProvider,
     );
     let persona = PersonaProfile::lychnos_default();
-    let provider = MockConversationProvider;
+    let provider = local_brain::RuntimeBrain::discover();
     let stt = match stt::WhisperCppStt::discover() {
         Ok(stt) => {
             println!("Speech-to-text ready · {}", stt.description());
@@ -71,8 +72,9 @@ fn main() {
     publish_snapshot(&runtime);
 
     println!(
-        "Runtime ready · persona={} · provider=local-mock",
-        persona.display_name
+        "Runtime ready · persona={} · provider={}",
+        persona.display_name,
+        provider.description()
     );
 
     loop {
@@ -257,7 +259,7 @@ fn process_voice_control_requests(
     active_capture: &mut Option<audio::ActiveCapture>,
     stt: Option<&stt::WhisperCppStt>,
     speech_output: Option<&tts::SpeechOutputWorker>,
-    provider: &MockConversationProvider,
+    provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
 ) {
     for path in sorted_json_files(&voice_control_inbox_path()) {
@@ -454,7 +456,7 @@ fn handle_completed_voice_turn(
     completed: &audio::CompletedCapture,
     stt: Option<&stt::WhisperCppStt>,
     speech_output: Option<&tts::SpeechOutputWorker>,
-    provider: &MockConversationProvider,
+    provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
 ) -> Result<(String, InteractionId), String> {
     let stt = stt.ok_or_else(|| {
@@ -480,15 +482,12 @@ fn handle_completed_voice_turn(
 }
 
 fn handle_conversation_request(
-    provider: &MockConversationProvider,
+    provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
     request: &ConversationRequest,
 ) -> Result<(), String> {
-    let response = match provider.respond(persona, request) {
-        Ok(response) => response,
-        Err(never) => match never {},
-    };
+    let response = provider.respond(persona, request)?;
 
     publish_interaction_response(&response)?;
 
@@ -503,7 +502,7 @@ fn handle_conversation_request(
 }
 
 fn process_interaction_requests(
-    provider: &MockConversationProvider,
+    provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
 ) {

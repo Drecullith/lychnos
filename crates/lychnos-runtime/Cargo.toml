@@ -9,3 +9,5 @@ repository.workspace = true
 [dependencies]
 lychnos-core = { path = "../lychnos-core" }
 serde_json.workspace = true
+ureq.workspace = true
+getrandom.workspace = true

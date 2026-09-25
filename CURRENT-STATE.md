@@ -605,7 +605,7 @@ Current expected test counts:
 
 ```text
 Core workspace:       177
-Runtime adapter tests:   5
+Runtime adapter tests:   7
 GTK shell prototype:     5
 ```
 
@@ -673,6 +673,7 @@ Accepted ADRs currently cover:
 0044 Provider-neutral local text-to-speech
 0045 Bounded character initiative
 0046 Capability-aware intelligence routing across bodies
+0047 First LocalBrain adapter on Omarchy
 ```
 
 ## Intentionally Mocked
@@ -685,7 +686,7 @@ The following currently exist only as machine-independent test implementations:
 - audit persistence
 - memory persistence
 - platform-specific collectors
-- conversation provider (current provider is deterministic local mock only)
+- deterministic mock conversation provider remains only as the fallback when a real local brain cannot start
 
 This is intentional.
 
@@ -702,8 +703,8 @@ Lychnos does **not** currently have:
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
 - live initiative provider/runtime scheduling (the bounded core policy now exists)
-- platform-specific LocalBrain adapters and model manifests (the cross-body routing policy now exists)
-- GPU/iGPU acceleration
+- additional LocalBrain adapters for Windows, macOS, Android, iOS, and Pocket bodies; Omarchy/Linux llama.cpp is now the first working adapter
+- portable model-manifest/package mappings for non-llama runtimes
 - real privileged execution
 - real shell-command execution
 - persistent memory storage
@@ -742,7 +743,7 @@ Still intentionally undecided:
 - audit integrity mechanism
 - AI provider interface details
 - OpenAI authentication and integration mechanism
-- local LLM runtime
+- final cross-platform local-model packaging strategy beyond the first working llama.cpp adapter
 - UI toolkit
 - voice stack
 - portable synchronization protocol
@@ -761,11 +762,11 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. implement the first capability-aware LocalBrain adapter on Omarchy without making its runtime/model universal
-2. define a portable model-manifest/catalog flow for Tiny, Compact, Standard, and Large bodies
-3. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
-4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
-5. add wake-word activation on the existing local voice pipeline
+1. define a portable model-manifest/catalog flow for Tiny, Compact, Standard, and Large bodies and map additional OS/mobile adapters onto it
+2. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
+3. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
+4. add wake-word activation on the existing local voice pipeline
+5. add explicit intelligence/voice/persona settings and user-tunable local/account routing
 6. keep real collectors and host execution behind their adapter/security boundaries
 
 ## Hardware Context

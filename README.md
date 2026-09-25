@@ -22,7 +22,7 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 - [Current state](CURRENT-STATE.md)
 - [Architecture decisions](docs/decisions/)
 
-The codebase is still foundation-first. Typed interaction, local push-to-talk capture, local speech-to-text, and local speech output now exist. Lychnos now also has capability-aware intelligence routing so desktops, phones, and future Pocket bodies can choose different local-brain implementations without changing identity, memory, persona, permissions, or initiative. Real contextual collectors, live local-brain adapters, account-backed intelligence bridges, wake-word activation, and system execution remain behind explicit adapter/security boundaries.
+The codebase is still foundation-first. Typed interaction, local push-to-talk capture, local speech-to-text, local speech output, and the first real local conversational brain now exist. Lychnos uses capability-aware intelligence routing so desktops, phones, and future Pocket bodies can choose different local-brain implementations without changing identity, memory, persona, permissions, or initiative. Omarchy/Linux currently has the first working llama.cpp adapter; additional OS/mobile adapters, real contextual collectors, account-backed intelligence bridges, wake-word activation, and system execution remain behind explicit adapter/security boundaries.
 
 ## Omarchy development install
 
@@ -42,6 +42,14 @@ For local voice input and spoken replies, install the user-level STT/TTS stacks 
 ```
 
 These install multilingual whisper.cpp speech recognition and Piper text-to-speech plus the current Lychnos baseline voice under Lychnos-owned user directories; neither requires `sudo`.
+
+For the first desktop LocalBrain adapter, install llama.cpp and a capability-appropriate local model with:
+
+```bash
+./scripts/install-local-brain-llama.sh
+```
+
+The desktop installer chooses Tiny / Compact / Standard / Large from available memory, or accepts an explicit class such as `--class compact`. The selected runtime/model is written only to the machine-local `~/.config/lychnos/brain.env`; it is not a universal Lychnos requirement. Android, iOS, Windows, macOS, and Pocket bodies may use different adapters behind the same core contracts.
 
 After installation:
 

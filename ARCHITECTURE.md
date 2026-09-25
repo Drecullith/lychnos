@@ -216,6 +216,8 @@ The core models broad body platforms, normalized hardware capabilities, local-br
 
 A desktop may therefore run a larger GGUF model through llama.cpp while an Android, iOS, or Pocket body selects a smaller or platform-native model, all behind the same Lychnos conversation/persona/initiative contracts.
 
+The first Omarchy adapter now runs a loopback-only llama.cpp child server behind the existing `ConversationProvider` and `InitiativeProvider` boundaries. Model selection is machine-local, local HTTP is authenticated with an ephemeral runtime token, hidden `<think>` content is stripped before presentation, and failure to start the local brain falls back to the deterministic mock rather than making Lychnos unusable.
+
 ### visual shell prototype
 
 `prototypes/lychnos-shell` is an isolated Omarchy/Wayland experiment built with GTK4 and gtk4-layer-shell.
