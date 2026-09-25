@@ -77,14 +77,14 @@ Turn the foundation into a richer local development environment without yet depe
 
 Likely work:
 
-- richer deterministic collectors and scenarios
+- richer deterministic collectors and scenarios (scripted event/empty/error/recovery flow now implemented)
 - multi-event simulations
 - analyzer/provider interface design
 - explicit user-approval flow with exact pending approval and rejection semantics
 - configuration consumption by the application runtime (startup mode now wired through typed config)
 - diagnostics integration (runtime emission now wired independently from mandatory security audit)
 - persistent local development state where justified
-- failure injection and recovery tests
+- failure injection and recovery tests (collector failure/recovery slice implemented)
 - cancellation semantics for work already in progress when Disabled is entered
 - resource-budget instrumentation for later Game Mode testing
 
