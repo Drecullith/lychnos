@@ -82,6 +82,8 @@ Implemented:
 - explicit no-event state through `Ok(None)`
 - collector-specific error propagation
 - deterministic FIFO `MockCollector`
+- deterministic `ScriptedCollector` for ordered event, empty-poll, and injected-error scenarios
+- typed `InjectedCollectorError` for reproducible failure injection
 - `FoundationRuntime::collect_once(...)`
 - separate collector and runtime failures through `CollectorCycleError<E>`
 - end-to-end collector -> runtime -> analyzer -> safety -> permission -> audit tests
@@ -91,6 +93,9 @@ Implemented:
 - queued collector events remain pending while background work is suppressed
 - explicit re-enable to Normal resumes collection
 - live action safety still applies to already-normalized events entering through the direct runtime boundary
+- collector errors emit ordinary diagnostics while preserving the original typed collector error
+- collector failures do not fabricate security-audit records
+- deterministic tests prove recovery after an injected collector failure and continued event processing
 
 The collector abstraction is machine-independent. Real terminal, journal, systemd, hardware, and Omarchy-specific collectors are still intentionally deferred.
 
@@ -413,7 +418,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-93
+97
 ```
 
 Current quality gate:
@@ -458,6 +463,7 @@ Accepted ADRs currently cover:
 0022 Explicit pending action rejection
 0023 Typed configuration runtime consumption
 0024 Runtime diagnostics integration
+0025 Deterministic collector failure scenarios
 ```
 
 ## Intentionally Mocked
@@ -543,7 +549,7 @@ Immediate next work should remain machine-independent and simulation-first.
 Likely next steps:
 
 1. define system-driven cancellation semantics separately from explicit user rejection
-2. add richer deterministic scenarios and failure injection
+2. expand deterministic simulation into richer multi-event scenarios
 3. define cancellation semantics for already-running work before any real executor exists
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
