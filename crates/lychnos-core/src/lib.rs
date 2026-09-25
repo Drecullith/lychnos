@@ -15,6 +15,7 @@ pub mod orchestrator;
 pub mod permission;
 pub mod providers;
 pub mod runtime;
+pub mod scenario;
 
 /// Canonical project name.
 pub const PROJECT_NAME: &str = "Lychnos";
