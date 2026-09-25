@@ -10,6 +10,7 @@ use crate::{
     bus::{EventSubscription, InMemoryEventBus, PublishReport},
     collector::Collector,
     config::LychnosConfig,
+    diagnostics::{DiagnosticLevel, DiagnosticRecord, DiagnosticSink, InMemoryDiagnosticLog},
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{MockExecutionOutcome, MockExecutor},
     providers::{IdProvider, TimeProvider},
@@ -74,6 +75,8 @@ pub struct FoundationRuntime<I, T> {
     subscription: EventSubscription,
     runtime: RuntimeController,
     audit: InMemoryAuditLog,
+    diagnostics: InMemoryDiagnosticLog,
+    diagnostics_enabled: bool,
     pending_actions: BTreeMap<ActionId, ActionProposal>,
     ids: I,
     clock: T,
@@ -85,20 +88,42 @@ where
     T: TimeProvider,
 {
     /// Creates a foundation runtime with explicit providers and startup mode.
+    ///
+    /// Ordinary diagnostics use their default enabled state. Security auditing
+    /// remains mandatory and independent of this setting.
     #[must_use]
     pub fn new(initial_mode: RuntimeMode, ids: I, clock: T) -> Self {
+        Self::new_with_diagnostics(initial_mode, true, ids, clock)
+    }
+
+    fn new_with_diagnostics(
+        initial_mode: RuntimeMode,
+        diagnostics_enabled: bool,
+        ids: I,
+        clock: T,
+    ) -> Self {
         let bus = InMemoryEventBus::new();
         let subscription = bus.subscribe();
 
-        Self {
+        let mut runtime = Self {
             bus,
             subscription,
             runtime: RuntimeController::new(initial_mode),
             audit: InMemoryAuditLog::new(),
+            diagnostics: InMemoryDiagnosticLog::new(),
+            diagnostics_enabled,
             pending_actions: BTreeMap::new(),
             ids,
             clock,
-        }
+        };
+
+        runtime.emit_diagnostic(
+            DiagnosticLevel::Info,
+            "runtime",
+            format!("Foundation runtime started in {initial_mode:?} mode"),
+        );
+
+        runtime
     }
 
     /// Creates a foundation runtime from validated typed configuration.
@@ -108,7 +133,12 @@ where
     /// incrementally rather than being interpreted prematurely.
     #[must_use]
     pub fn from_config(config: &LychnosConfig, ids: I, clock: T) -> Self {
-        Self::new(config.runtime.startup_mode.into(), ids, clock)
+        Self::new_with_diagnostics(
+            config.runtime.startup_mode.into(),
+            config.diagnostics.enabled,
+            ids,
+            clock,
+        )
     }
 
     /// Returns the current runtime safety mode.
@@ -123,6 +153,21 @@ where
         &self.audit
     }
 
+    /// Returns ordinary runtime diagnostics.
+    ///
+    /// These records are intentionally separate from the mandatory security
+    /// audit trail.
+    #[must_use]
+    pub fn diagnostics_log(&self) -> &InMemoryDiagnosticLog {
+        &self.diagnostics
+    }
+
+    /// Returns whether ordinary diagnostics are enabled.
+    #[must_use]
+    pub const fn diagnostics_enabled(&self) -> bool {
+        self.diagnostics_enabled
+    }
+
     /// Returns the pending proposal with the supplied action ID.
     #[must_use]
     pub fn pending_action(&self, action_id: &ActionId) -> Option<&ActionProposal> {
@@ -133,6 +178,25 @@ where
     #[must_use]
     pub fn pending_actions_len(&self) -> usize {
         self.pending_actions.len()
+    }
+
+    fn emit_diagnostic(
+        &mut self,
+        level: DiagnosticLevel,
+        component: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        if !self.diagnostics_enabled {
+            return;
+        }
+
+        match self
+            .diagnostics
+            .emit(DiagnosticRecord::new(level, component, message))
+        {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
     }
 
     /// Evaluates one structured proposal through the mock execution boundary.
@@ -155,6 +219,36 @@ where
         if matches!(outcome, MockExecutionOutcome::AwaitingUserApproval { .. }) {
             self.pending_actions
                 .insert(proposal.id.clone(), proposal.clone());
+        }
+
+        match &outcome {
+            MockExecutionOutcome::WouldExecute { action_id } => {
+                self.emit_diagnostic(
+                    DiagnosticLevel::Info,
+                    "action",
+                    format!(
+                        "Action {} would execute through the mock boundary",
+                        action_id.as_str()
+                    ),
+                );
+            }
+            MockExecutionOutcome::AwaitingUserApproval { action_id } => {
+                self.emit_diagnostic(
+                    DiagnosticLevel::Info,
+                    "action",
+                    format!("Action {} is awaiting user approval", action_id.as_str()),
+                );
+            }
+            MockExecutionOutcome::Blocked { action_id, reason } => {
+                self.emit_diagnostic(
+                    DiagnosticLevel::Warning,
+                    "action",
+                    format!(
+                        "Action {} was blocked by runtime safety: {reason:?}",
+                        action_id.as_str()
+                    ),
+                );
+            }
         }
 
         outcome
@@ -462,6 +556,90 @@ mod tests {
 
             assert_eq!(runtime.mode(), expected_mode);
         }
+    }
+
+    #[test]
+    fn typed_config_controls_diagnostic_emission() {
+        let enabled = LychnosConfig::default();
+
+        let enabled_runtime = FoundationRuntime::from_config(
+            &enabled,
+            SequenceIdProvider::default(),
+            FixedTimeProvider::new(1_800_000_000_123),
+        );
+
+        assert!(enabled_runtime.diagnostics_enabled());
+        assert_eq!(enabled_runtime.diagnostics_log().len(), 1);
+        assert_eq!(
+            enabled_runtime.diagnostics_log().records()[0].level,
+            DiagnosticLevel::Info
+        );
+        assert_eq!(
+            enabled_runtime.diagnostics_log().records()[0].component,
+            "runtime"
+        );
+
+        let mut disabled = LychnosConfig::default();
+        disabled.diagnostics.enabled = false;
+
+        let disabled_runtime = FoundationRuntime::from_config(
+            &disabled,
+            SequenceIdProvider::default(),
+            FixedTimeProvider::new(1_800_000_000_123),
+        );
+
+        assert!(!disabled_runtime.diagnostics_enabled());
+        assert!(disabled_runtime.diagnostics_log().is_empty());
+    }
+
+    #[test]
+    fn proposal_evaluation_emits_runtime_diagnostic() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let proposal = state_changing_proposal("action-diagnostic");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        assert_eq!(runtime.diagnostics_log().len(), 2);
+
+        let record = runtime
+            .diagnostics_log()
+            .records()
+            .last()
+            .expect("proposal evaluation should emit diagnostics");
+
+        assert_eq!(record.level, DiagnosticLevel::Info);
+        assert_eq!(record.component, "action");
+        assert!(record.message.contains("action-diagnostic"));
+        assert!(record.message.contains("awaiting user approval"));
+    }
+
+    #[test]
+    fn disabling_diagnostics_does_not_disable_security_audit() {
+        let mut config = LychnosConfig::default();
+        config.diagnostics.enabled = false;
+
+        let mut runtime = FoundationRuntime::from_config(
+            &config,
+            SequenceIdProvider::default(),
+            FixedTimeProvider::new(1_800_000_000_123),
+        );
+
+        let proposal = state_changing_proposal("action-audit-still-on");
+
+        assert!(matches!(
+            runtime.evaluate_proposal(&proposal),
+            MockExecutionOutcome::AwaitingUserApproval { .. }
+        ));
+
+        assert!(runtime.diagnostics_log().is_empty());
+
+        let records = runtime.audit_log().records();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, AuditEventKind::PermissionEvaluated);
     }
 
     fn state_changing_proposal(id: &str) -> ActionProposal {
