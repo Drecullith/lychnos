@@ -126,6 +126,8 @@ The `RuntimeController` is thread-safe.
 
 Disabled mode fails closed and cannot be weakened by ordinary Game Mode transitions. Leaving Disabled requires an explicit enable operation.
 
+Already-started simulated work receives a runtime lease. Game Mode exposes a reversible pause request, while Disabled permanently invalidates older leases and exposes a cancellation request that cannot be cleared by later re-enable.
+
 ### executor
 
 Contains the foundation-phase `MockExecutor`.
@@ -142,6 +144,10 @@ Blocked
 
 The executor evaluates live runtime state itself instead of trusting a caller-provided permission result.
 
+The same module contains simulation-only running-work lifecycle types. They distinguish pause/cancellation requests from acknowledged pause, cancellation-unavailable, normal completion, and confirmed stop-after-cancellation.
+
+Deterministic cooperation-window assessment accepts caller-supplied elapsed time and timeout budgets. It does not choose a wall-clock timer, async runtime, or escalation mechanism.
+
 ### audit
 
 Defines structured security audit records and the `AuditSink` interface.
@@ -152,6 +158,8 @@ The current `InMemoryAuditLog` is append-only through its public API.
 
 Persistent, tamper-resistant audit storage is future work.
 
+Mock running-work transitions use a dedicated `SimulationWorkLifecycleChanged` event with an explicit simulation marker. Reserved real-execution audit kinds are not used to imply that host execution occurred.
+
 ### diagnostics
 
 Defines ordinary troubleshooting and development records separately from the security audit system.
@@ -159,6 +167,14 @@ Defines ordinary troubleshooting and development records separately from the sec
 The current `InMemoryDiagnosticLog` is a foundation implementation behind the `DiagnosticSink` interface.
 
 Diagnostics may be disabled independently. They do not replace mandatory security audit records.
+
+### resource
+
+Defines machine-independent resource observations and mode-specific resource budgets for later performance coexistence measurement.
+
+The current module provides typed metric names, explicit units, deterministic budget evaluation, a `ResourceSink` interface, and an in-memory observation log.
+
+It does not sample the host. Linux/Omarchy telemetry sources, real thresholds, sampling cadence, measurement windows, and background scheduling remain adapter-level future work.
 
 ### memory
 
@@ -195,6 +211,8 @@ Defines the current machine-independent `FoundationRuntime`.
 It owns the foundation event bus, internal subscription, runtime safety controller, in-memory security audit log, and injected ID/time providers.
 
 It accepts already-normalized events directly and can also pull one event from a collector while respecting runtime background-work suppression.
+
+For Phase 2 simulation it also retains mock running-work records by action ID, exposes read-only lifecycle snapshots, and mediates audited lifecycle transitions without granting host execution authority.
 
 ## CLI Crate
 
@@ -304,7 +322,9 @@ Current core behavior blocks actions in both modes.
 
 Runtime-driven collector polling is also suppressed in both Game Mode and Disabled before a collector is called.
 
-Real performance coexistence behavior must be measured later on actual workloads.
+For already-started simulated work, Game Mode requests cooperative pause and Disabled requests latched cancellation. Timeout assessment is currently deterministic simulation only and does not perform forced termination.
+
+Resource-budget structures now exist in the core, but real performance coexistence behavior must still be measured later on actual workloads.
 
 ## Platform Integration Boundary
 

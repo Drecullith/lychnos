@@ -113,7 +113,9 @@ Actions are denied.
 
 Non-essential collector polling is suppressed before collectors run.
 
-The long-term purpose is to minimize interference with gaming, streaming, thermals, latency, and anti-cheat-sensitive workloads.
+Already-started simulated work receives a reversible pause request. Pause acknowledgement and later resume are explicit simulation lifecycle transitions; they do not claim that a host process actually paused.
+
+The long-term purpose is to minimize interference with gaming, streaming, thermals, latency, and anti-cheat-sensitive workloads. Typed resource-budget instrumentation now exists in the core, but real host sampling and validated budgets remain future work.
 
 ### Disabled
 
@@ -125,7 +127,9 @@ Disabled fails closed against ordinary Game Mode transitions.
 
 Returning to Normal requires an explicit enable operation.
 
-A future real executor must also handle cancellation or containment of work that had already started before Disabled was entered.
+Disabled permanently invalidates older simulation work leases and exposes a latched cancellation request. Mock acknowledgement is recorded separately from the request so the prototype does not falsely claim that work stopped.
+
+A future real executor must still implement real cancellation or containment of work that had already started before Disabled was entered.
 
 ## Permission Boundary
 
@@ -168,9 +172,12 @@ The audit domain is intended to record security-relevant behavior such as:
 
 - permission decisions
 - runtime-mode transitions
+- simulation-only running-work lifecycle transitions
 - future execution attempts
 - future execution results
 - other security-significant activity
+
+Simulation work uses a dedicated `SimulationWorkLifecycleChanged` kind with an explicit simulation marker. Those records must not be treated as evidence that a host command, process, or privileged operation occurred.
 
 The current audit sink is append-only through its public API and exists only in memory.
 

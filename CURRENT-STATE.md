@@ -187,6 +187,11 @@ Implemented:
 - explicit executor-owned acknowledgement for Game Mode pause and Disabled cancellation
 - explicit resume after Game Mode; paused work never silently resumes
 - completion-after-cancellation-request race represented separately from confirmed cancellation
+- stable machine-readable runtime/work-state labels
+- structured `MockWorkLifecycleSnapshot` reporting current mode, state, terminal status, and cooperation-pending status
+- dedicated `SimulationWorkLifecycleChanged` audit records for successful mock-work transitions
+- simulation lifecycle audit details explicitly identify `simulation = true` and do not use real-execution audit kinds
+- invalid lifecycle transitions do not falsely append lifecycle-change audit records
 - Disabled-mode cancellation is modeled without shell commands, process control, file writes, or other host effects
 
 ### Bound action approval flow
@@ -262,7 +267,23 @@ Implemented:
 
 Pending-action cancellation remains separate from cancellation of already-started work.
 
-Already-started work now has a separate machine-independent runtime-lease boundary. Game Mode produces a reversible pause request; Disabled permanently invalidates older leases and produces an irreversible cancellation request. The simulation distinguishes requested, acknowledged, unavailable, completed, paused, resumed, and stopped-after-cancellation states. `FoundationRuntime` can retain mock work by action ID so deterministic scenarios can exercise the full lifecycle across runtime transitions. No operating-system task is started or stopped by this prototype, and real executor cooperation, timeout/escalation handling, persistence, and rollback semantics are still not implemented.
+Already-started work now has a separate machine-independent runtime-lease boundary. Game Mode produces a reversible pause request; Disabled permanently invalidates older leases and produces an irreversible cancellation request. The simulation distinguishes requested, acknowledged, unavailable, completed, paused, resumed, and stopped-after-cancellation states. `FoundationRuntime` retains mock work by action ID, exposes structured lifecycle snapshots, and audits successful mock lifecycle transitions explicitly as simulation-only. No operating-system task is started or stopped by this prototype.
+
+### Deterministic running-work cooperation windows
+
+Implemented:
+
+- explicit cooperation request classes for Game Mode pause and Disabled cancellation
+- pure `MockWorkCooperationAssessment`
+- caller-supplied elapsed milliseconds and timeout budget
+- `Waiting`, `TimedOut`, `Satisfied`, `Unavailable`, `SupersededByDisabled`, `CompletedBeforeCooperation`, and `NotRequested` outcomes
+- timeout observation does not force a lifecycle state change
+- late acknowledgement after an observed timeout remains representable
+- deterministic scenario coverage for delayed pause acknowledgement
+- deterministic scenario coverage for late Disabled-cancellation acknowledgement
+- deterministic cancellation-unavailable and later-completion story
+
+This boundary deliberately does not choose wall-clock scheduling, an async runtime, production timeout values, process termination, or escalation behavior. Real executor cooperation, persistence, rollback, and escalation remain future work.
 
 ### Security audit model
 
@@ -298,6 +319,22 @@ Implemented:
 Diagnostics are for troubleshooting and development. They do not carry the security guarantees of the audit system and may be disabled independently.
 
 Security auditing remains mandatory and independent of diagnostic configuration.
+
+### Resource-budget instrumentation
+
+Implemented:
+
+- machine-independent `resource` module
+- stable resource metric names
+- explicit units: bytes, microseconds, counts, and basis points
+- typed `ResourceObservation` values tagged with runtime mode and component
+- mode-specific `ResourceBudget`
+- explicit metric/unit/runtime-mode mismatch errors
+- exact within-budget headroom and exceeded-budget excess
+- generic `ResourceSink`
+- deterministic `InMemoryResourceLog`
+
+No real resource sampler is implemented yet. The core deliberately does not choose Linux telemetry sources, production metric names, measurement windows, thresholds, sampling cadence, background tasks, or an async runtime. Phase 3 adapters can later supply real Omarchy measurements through this boundary.
 
 ### Lychnos-owned memory
 
@@ -434,6 +471,11 @@ Implemented:
 - deterministic explicit-rejection story with `ActionRejected`
 - deterministic system-cancellation story with `ActionCancelled`
 - deterministic Disabled-mode approval retry: blocked approval retains pending state, explicit re-enable permits retry of the same exact proposal
+- tracked mock running-work start, inspection, pause acknowledgement, resume, cancellation acknowledgement, cancellation-unavailable, and completion steps
+- deterministic cooperation-window assessment steps with caller-supplied elapsed time and timeout budget
+- deterministic delayed Game Mode cooperation and timeout story
+- deterministic late Disabled-cancellation acknowledgement after timeout
+- deterministic cancellation-unavailable and later normal-completion story
 
 The scenario layer is simulation orchestration only. It delegates lifecycle authority to `FoundationRuntime` and does not bypass runtime safety, permission checks, approval boundaries, cancellation semantics, or security auditing.
 
@@ -480,7 +522,7 @@ Implemented and synchronized:
 Current expected test count:
 
 ```text
-133
+147
 ```
 
 Current quality gate:
@@ -533,6 +575,9 @@ Accepted ADRs currently cover:
 0030 Running-work lifecycle acknowledgement
 0031 Game Mode running-work pause semantics
 0032 Tracked mock running-work scenarios
+0033 Simulation work lifecycle reporting and audit
+0034 Deterministic running-work cooperation windows
+0035 Resource budget instrumentation abstractions
 ```
 
 ## Intentionally Mocked
@@ -622,9 +667,9 @@ Immediate next work should remain machine-independent and simulation-first.
 
 Likely next steps:
 
-1. define machine-independent reporting/audit semantics for tracked execution lifecycle without implying that mock state is real host execution
-2. add deterministic timeout, delayed-cooperation, and failure scenarios around pause/cancellation handling
-3. introduce resource-budget instrumentation abstractions for later Game Mode and gaming/streaming coexistence measurements before Phase 3 host integration
+1. define a read-only companion/presentation-state projection so a UI can consume runtime mode, pending approvals, alerts, and mock lifecycle state without receiving execution authority
+2. build a thin desktop visual-shell prototype around the canonical floating Lychnos body using simulated/projected state only
+3. keep real Omarchy collectors, real resource sampling, and any host execution behind Phase 3 adapter and security boundaries
 
 Real Omarchy integration remains Phase 3 work and should begin only after these prototype runtime boundaries are stable enough to connect safely.
 
