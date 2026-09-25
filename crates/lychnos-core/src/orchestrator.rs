@@ -7,6 +7,7 @@ use crate::{
     analyzer::MockAnalyzer,
     audit::{AuditDetails, AuditEventKind, AuditRecord, AuditSink, AuditValue, InMemoryAuditLog},
     bus::{EventSubscription, InMemoryEventBus, PublishReport},
+    collector::Collector,
     event::{Event, EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::{MockExecutionOutcome, MockExecutor},
     providers::{IdProvider, TimeProvider},
@@ -37,6 +38,16 @@ impl From<TryRecvError> for FoundationRuntimeError {
             TryRecvError::Disconnected => Self::EventSubscriptionDisconnected,
         }
     }
+}
+
+/// Failure while collecting and processing one foundation event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectorCycleError<E> {
+    /// The collector itself failed.
+    Collector(E),
+
+    /// The event reached the runtime but internal delivery failed.
+    Runtime(FoundationRuntimeError),
 }
 
 /// Machine-independent orchestration service used during the foundation phase.
@@ -153,6 +164,25 @@ where
         self.process_event(event)
     }
 
+    /// Pulls one event from a collector and, when present, processes it
+    /// through the existing foundation pipeline.
+    pub fn collect_once<C: Collector>(
+        &mut self,
+        collector: &mut C,
+    ) -> Result<Option<FoundationCycle>, CollectorCycleError<C::Error>> {
+        let event = collector
+            .collect()
+            .map_err(CollectorCycleError::Collector)?;
+
+        let Some(event) = event else {
+            return Ok(None);
+        };
+
+        self.process_event(event)
+            .map(Some)
+            .map_err(CollectorCycleError::Runtime)
+    }
+
     /// Processes an already-normalized event through the foundation pipeline.
     pub fn process_event(
         &mut self,
@@ -190,6 +220,7 @@ mod tests {
     use super::*;
     use crate::{
         action::ActionId,
+        collector::MockCollector,
         event::{EventId, EventTimestamp},
         permission::DenialReason,
         providers::{FixedTimeProvider, SequenceIdProvider},
@@ -420,6 +451,113 @@ mod tests {
         );
 
         assert_eq!(cycle.audit_records, 1);
+    }
+
+    #[test]
+    fn mock_collector_event_flows_through_foundation_runtime() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+
+        let event = Event {
+            id: EventId::new("collector-event-001"),
+            occurred_at: EventTimestamp::from_unix_millis(444),
+            source: EventSource::new("mock-collector"),
+            kind: EventKind::new("collector.test"),
+            severity: Severity::Warning,
+            sensitivity: Sensitivity::Standard,
+            correlation_id: None,
+            payload: EventPayload::new(),
+        };
+
+        let mut collector = MockCollector::from_events([event]);
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("mock collection should succeed")
+            .expect("collector should produce one cycle");
+
+        assert_eq!(cycle.event.id.as_str(), "collector-event-001");
+        assert_eq!(cycle.event.kind.as_str(), "collector.test");
+
+        assert_eq!(
+            cycle.outcome,
+            MockExecutionOutcome::WouldExecute {
+                action_id: ActionId::new("action-for-collector-event-001"),
+            }
+        );
+
+        assert_eq!(cycle.audit_records, 1);
+        assert_eq!(runtime.audit_log().records()[0].id.as_str(), "audit-000001");
+        assert!(collector.is_empty());
+    }
+
+    #[test]
+    fn empty_collector_produces_no_foundation_cycle() {
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let mut collector = MockCollector::new();
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("empty mock collection should succeed");
+
+        assert!(cycle.is_none());
+        assert!(runtime.audit_log().is_empty());
+    }
+
+    #[test]
+    fn disabled_runtime_blocks_collector_sourced_event() {
+        let mut runtime = runtime(RuntimeMode::Disabled);
+
+        let event = Event {
+            id: EventId::new("collector-event-disabled"),
+            occurred_at: EventTimestamp::from_unix_millis(555),
+            source: EventSource::new("mock-collector"),
+            kind: EventKind::new("collector.test"),
+            severity: Severity::Info,
+            sensitivity: Sensitivity::Standard,
+            correlation_id: None,
+            payload: EventPayload::new(),
+        };
+
+        let mut collector = MockCollector::from_events([event]);
+
+        let cycle = runtime
+            .collect_once(&mut collector)
+            .expect("mock collection should succeed")
+            .expect("collector should produce one cycle");
+
+        assert_eq!(
+            cycle.outcome,
+            MockExecutionOutcome::Blocked {
+                action_id: ActionId::new("action-for-collector-event-disabled"),
+                reason: DenialReason::Disabled,
+            }
+        );
+
+        assert_eq!(cycle.audit_records, 1);
+    }
+
+    #[test]
+    fn collector_errors_are_preserved() {
+        struct FailingCollector;
+
+        impl Collector for FailingCollector {
+            type Error = &'static str;
+
+            fn collect(&mut self) -> Result<Option<Event>, Self::Error> {
+                Err("collector failed")
+            }
+        }
+
+        let mut runtime = runtime(RuntimeMode::Normal);
+        let mut collector = FailingCollector;
+
+        let error = runtime
+            .collect_once(&mut collector)
+            .expect_err("collector failure should propagate");
+
+        assert_eq!(error, CollectorCycleError::Collector("collector failed"));
+
+        assert!(runtime.audit_log().is_empty());
     }
 
     #[test]

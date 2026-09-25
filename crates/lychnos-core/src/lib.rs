@@ -4,6 +4,7 @@ pub mod action;
 pub mod analyzer;
 pub mod audit;
 pub mod bus;
+pub mod collector;
 pub mod config;
 pub mod event;
 pub mod executor;
