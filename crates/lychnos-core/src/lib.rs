@@ -6,6 +6,7 @@ pub mod audit;
 pub mod bus;
 pub mod collector;
 pub mod config;
+pub mod diagnostics;
 pub mod event;
 pub mod executor;
 pub mod memory;

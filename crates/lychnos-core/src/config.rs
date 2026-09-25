@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::runtime::RuntimeMode;
 
 /// Current supported Lychnos configuration schema.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 
 /// Complete machine-independent Lychnos configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -14,7 +14,7 @@ pub struct LychnosConfig {
     pub schema_version: u32,
     pub runtime: RuntimeConfig,
     pub memory: MemoryConfig,
-    pub audit: AuditConfig,
+    pub diagnostics: DiagnosticsConfig,
     pub privacy: PrivacyConfig,
 }
 
@@ -24,7 +24,7 @@ impl Default for LychnosConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             runtime: RuntimeConfig::default(),
             memory: MemoryConfig::default(),
-            audit: AuditConfig::default(),
+            diagnostics: DiagnosticsConfig::default(),
             privacy: PrivacyConfig::default(),
         }
     }
@@ -152,14 +152,17 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Security audit configuration.
+/// Ordinary diagnostic logging configuration.
+///
+/// Security auditing is intentionally not configurable here. Security audit
+/// records are a mandatory core safety mechanism and use a separate system.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct AuditConfig {
+pub struct DiagnosticsConfig {
     pub enabled: bool,
 }
 
-impl Default for AuditConfig {
+impl Default for DiagnosticsConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
@@ -238,7 +241,7 @@ mod tests {
     fn config_loader_parses_explicit_source() {
         let source = StaticConfigSource::with_toml(
             r#"
-schema_version = 1
+schema_version = 2
 
 [runtime]
 startup_mode = "disabled"
@@ -293,7 +296,7 @@ schema_version = 999
         assert_eq!(config.schema_version, CONFIG_SCHEMA_VERSION);
         assert_eq!(config.runtime.startup_mode, StartupMode::Normal);
         assert!(config.memory.enabled);
-        assert!(config.audit.enabled);
+        assert!(config.diagnostics.enabled);
         assert!(!config.privacy.cloud_requests_enabled);
     }
 
@@ -301,7 +304,7 @@ schema_version = 999
     fn toml_can_override_supported_settings() {
         let config = LychnosConfig::from_toml(
             r#"
-schema_version = 1
+schema_version = 2
 
 [runtime]
 startup_mode = "game_mode"
@@ -309,8 +312,8 @@ startup_mode = "game_mode"
 [memory]
 enabled = false
 
-[audit]
-enabled = true
+[diagnostics]
+enabled = false
 
 [privacy]
 cloud_requests_enabled = true
@@ -320,21 +323,54 @@ cloud_requests_enabled = true
 
         assert_eq!(config.runtime.startup_mode, StartupMode::GameMode);
         assert!(!config.memory.enabled);
-        assert!(config.audit.enabled);
+        assert!(!config.diagnostics.enabled);
         assert!(config.privacy.cloud_requests_enabled);
+    }
+
+    #[test]
+    fn security_audit_cannot_be_disabled_through_configuration() {
+        let error = LychnosConfig::from_toml(
+            r#"
+schema_version = 2
+
+[audit]
+enabled = false
+"#,
+        )
+        .expect_err("security audit must not be configurable");
+
+        assert!(matches!(error, ConfigError::Parse(_)));
     }
 
     #[test]
     fn unknown_fields_are_rejected() {
         let error = LychnosConfig::from_toml(
             r#"
-schema_version = 1
+schema_version = 2
 mystery_setting = true
 "#,
         )
         .expect_err("unknown configuration fields should fail");
 
         assert!(matches!(error, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn legacy_schema_version_is_rejected() {
+        let error = LychnosConfig::from_toml(
+            r#"
+schema_version = 1
+"#,
+        )
+        .expect_err("legacy schema must be rejected");
+
+        assert_eq!(
+            error,
+            ConfigError::UnsupportedSchemaVersion {
+                found: 1,
+                supported: CONFIG_SCHEMA_VERSION,
+            }
+        );
     }
 
     #[test]
