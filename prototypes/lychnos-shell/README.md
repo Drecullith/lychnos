@@ -82,6 +82,9 @@ The installed shell no longer depends on the Git checkout for its body asset or 
 - right-click for see-through, status, position lock/reset, minimize, and close controls;
 - **Minimize to top bar** hides the orb and reveals the Lychnos Omarchy bar icon;
 - clicking the small bar icon restores the orb;
+- pending approvals show the reason, action kind, risk, impact, and **Approve / Reject** controls;
+- approval controls emit versioned session-local intent files only; the shell never receives an approval grant or executor handle;
+- the runtime owner validates an opaque binding against the exact live pending proposal before acting on the decision;
 - the body has a lightweight idle float/pulse animation.
 
 The Omarchy top-bar adapter lives under `integrations/omarchy/bar/` and is kept outside the platform-independent core.

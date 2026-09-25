@@ -379,6 +379,10 @@ Implemented:
 - installed `lychnos` launcher command with start, stop, restart, status, and logs
 - desktop application entry and repo-independent installed body/bar assets
 - launcher recovery of the active Wayland session environment for remote/non-graphical parent shells
+- pending-approval card with action reason, kind, risk, impact, Approve, and Reject controls
+- versioned presentation-to-runtime control envelope written into a session-local inbox
+- opaque SHA-256 proposal binding so stale same-ID UI decisions fail closed before runtime approval/rejection
+- runtime-side demo consumer that re-checks the exact live pending proposal before using existing audited approve/reject APIs
 - lightweight idle float/pulse animation
 - no executor, approval grant, runtime controller, or host-action authority in the shell
 
@@ -737,8 +741,8 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. expose pending-approval presentation controls without granting the shell direct execution authority
-2. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
+1. add explicit mock-event simulation controls so terminal-error, warning, approval, Game Mode, and Disabled stories can be triggered on demand
+2. begin the interaction boundary for typed conversation/persona without coupling identity to a single AI provider
 3. keep real collectors, AI-provider integration, and host execution behind their adapter/security boundaries
 
 ## Hardware Context

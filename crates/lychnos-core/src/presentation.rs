@@ -5,6 +5,7 @@
 //! but it does not gain authority by receiving it.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     action::{ActionId, ActionImpact, ActionKind, ActionProposal, ActionRisk, Capability},
@@ -17,6 +18,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingApprovalPresentation {
     pub action_id: ActionId,
+    /// Opaque digest binding this UI row to the exact in-memory proposal.
+    pub proposal_binding: String,
     pub kind: ActionKind,
     pub capability: Capability,
     pub impact: ActionImpact,
@@ -28,6 +31,7 @@ impl From<&ActionProposal> for PendingApprovalPresentation {
     fn from(proposal: &ActionProposal) -> Self {
         Self {
             action_id: proposal.id.clone(),
+            proposal_binding: proposal_binding(proposal),
             kind: proposal.kind.clone(),
             capability: proposal.capability.clone(),
             impact: proposal.impact,
@@ -35,6 +39,96 @@ impl From<&ActionProposal> for PendingApprovalPresentation {
             reason: proposal.reason.clone(),
         }
     }
+}
+
+fn proposal_binding(proposal: &ActionProposal) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{proposal:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// User decision emitted by a presentation surface for one pending action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingApprovalDecision {
+    Approve,
+    Reject,
+}
+
+/// Authority-free user intent sent from a presentation surface to the runtime owner.
+///
+/// The opaque proposal binding prevents a stale UI decision from being applied to
+/// a newer proposal that happens to reuse the same action ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingApprovalControlRequest {
+    pub action_id: ActionId,
+    pub proposal_binding: String,
+    pub decision: PendingApprovalDecision,
+}
+
+impl PendingApprovalControlRequest {
+    #[must_use]
+    pub fn from_presentation(
+        approval: &PendingApprovalPresentation,
+        decision: PendingApprovalDecision,
+    ) -> Self {
+        Self {
+            action_id: approval.action_id.clone(),
+            proposal_binding: approval.proposal_binding.clone(),
+            decision,
+        }
+    }
+
+    #[must_use]
+    pub fn matches_proposal(&self, proposal: &ActionProposal) -> bool {
+        self.action_id == proposal.id && self.proposal_binding == proposal_binding(proposal)
+    }
+}
+
+/// Current wire schema for presentation-to-runtime control requests.
+pub const CONTROL_SCHEMA_VERSION: u32 = 1;
+
+/// Versioned envelope for authority-free presentation control requests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionControlEnvelope {
+    pub schema_version: u32,
+    pub request: PendingApprovalControlRequest,
+}
+
+impl CompanionControlEnvelope {
+    #[must_use]
+    pub const fn new(request: PendingApprovalControlRequest) -> Self {
+        Self {
+            schema_version: CONTROL_SCHEMA_VERSION,
+            request,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn from_json(input: &str) -> Result<Self, ControlEnvelopeError> {
+        let envelope: Self = serde_json::from_str(input)
+            .map_err(|error| ControlEnvelopeError::Parse(error.to_string()))?;
+
+        if envelope.schema_version != CONTROL_SCHEMA_VERSION {
+            return Err(ControlEnvelopeError::UnsupportedSchemaVersion {
+                found: envelope.schema_version,
+                supported: CONTROL_SCHEMA_VERSION,
+            });
+        }
+
+        Ok(envelope)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlEnvelopeError {
+    Parse(String),
+    UnsupportedSchemaVersion { found: u32, supported: u32 },
 }
 
 /// UI-facing summary of one tracked simulation-only work item.
@@ -188,6 +282,45 @@ mod tests {
     }
 
     #[test]
+    fn approval_control_request_round_trips_and_binds_exact_proposal() {
+        let proposal = ActionProposal::new(
+            ActionId::new("action-control"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::Moderate,
+            "Write the requested file",
+            "test",
+        );
+        let projected = PendingApprovalPresentation::from(&proposal);
+        let request = PendingApprovalControlRequest::from_presentation(
+            &projected,
+            PendingApprovalDecision::Approve,
+        );
+        let envelope = CompanionControlEnvelope::new(request.clone());
+        let json = envelope
+            .to_json()
+            .expect("control envelope should serialize");
+        let decoded =
+            CompanionControlEnvelope::from_json(&json).expect("control envelope should decode");
+
+        assert_eq!(decoded.request, request);
+        assert!(decoded.request.matches_proposal(&proposal));
+
+        let changed = ActionProposal::new(
+            ActionId::new("action-control"),
+            ActionKind::new("file.write"),
+            Capability::new("file.write"),
+            ActionImpact::StateChanging,
+            ActionRisk::Moderate,
+            "Write a different file",
+            "test",
+        );
+
+        assert!(!decoded.request.matches_proposal(&changed));
+    }
+
+    #[test]
     fn tracked_work_projection_derives_terminal_and_cooperation_flags() {
         let waiting = TrackedWorkPresentation::new(
             ActionId::new("work-waiting"),
@@ -211,6 +344,7 @@ mod tests {
             diagnostics_enabled: true,
             pending_approvals: vec![PendingApprovalPresentation {
                 action_id: ActionId::new("action-wire"),
+                proposal_binding: "binding-wire".into(),
                 kind: ActionKind::new("file.write"),
                 capability: Capability::new("file.write"),
                 impact: ActionImpact::StateChanging,

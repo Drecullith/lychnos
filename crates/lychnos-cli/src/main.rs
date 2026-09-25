@@ -6,7 +6,9 @@ use lychnos_core::{
     event::{EventKind, EventPayload, EventSource, Sensitivity, Severity},
     executor::MockExecutionOutcome,
     orchestrator::FoundationRuntime,
-    presentation::CompanionPresentationEnvelope,
+    presentation::{
+        CompanionControlEnvelope, CompanionPresentationEnvelope, PendingApprovalDecision,
+    },
     providers::{SequenceIdProvider, SystemTimeProvider},
 };
 
@@ -19,12 +21,11 @@ fn main() {
         lychnos_core::version()
     );
 
-    if std::env::args().nth(1).as_deref() == Some("presentation-demo") {
-        run_presentation_demo();
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("presentation-demo") => run_presentation_demo(),
+        Some("approval-demo") => run_approval_control_demo(),
+        _ => run_foundation_simulation(),
     }
-
-    run_foundation_simulation();
 }
 
 fn run_foundation_simulation() {
@@ -139,6 +140,160 @@ fn run_presentation_demo() {
     runtime.enable_normal();
     publish_snapshot(&runtime, "normal");
     println!("Presentation demo complete; final snapshot is Normal.");
+}
+
+fn run_approval_control_demo() {
+    let mut runtime = FoundationRuntime::new(
+        Default::default(),
+        SequenceIdProvider::default(),
+        SystemTimeProvider,
+    );
+
+    clear_demo_control_inbox();
+
+    let proposal = ActionProposal::new(
+        ActionId::new("approval-control-demo"),
+        ActionKind::new("demo.safe_state_change"),
+        Capability::new("demo.safe_state_change"),
+        ActionImpact::StateChanging,
+        ActionRisk::Moderate,
+        "Apply the simulated state change",
+        "approval-control-demo",
+    );
+
+    let outcome = runtime.evaluate_proposal(&proposal);
+    assert!(matches!(
+        outcome,
+        MockExecutionOutcome::AwaitingUserApproval { .. }
+    ));
+    publish_snapshot(&runtime, "approval");
+    println!(
+        "Waiting for Approve/Reject from the Lychnos shell via {}",
+        control_inbox_path().display()
+    );
+
+    for _ in 0..240 {
+        if process_one_control_request(&mut runtime) {
+            publish_snapshot(&runtime, "resolved");
+            println!("Approval-control demo complete.");
+            return;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+
+    println!("No shell decision received before demo timeout.");
+}
+
+fn process_one_control_request(runtime: &mut Runtime) -> bool {
+    let inbox = control_inbox_path();
+    let Ok(entries) = fs::read_dir(&inbox) else {
+        return false;
+    };
+
+    let mut paths: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring unreadable control request {}: {error}",
+                    path.display()
+                );
+                let _ = fs::remove_file(&path);
+                continue;
+            }
+        };
+
+        let envelope = match CompanionControlEnvelope::from_json(&contents) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                eprintln!(
+                    "Ignoring invalid control request {}: {error:?}",
+                    path.display()
+                );
+                let _ = fs::remove_file(&path);
+                continue;
+            }
+        };
+
+        let request = envelope.request;
+        let Some(proposal) = runtime.pending_action(&request.action_id).cloned() else {
+            eprintln!(
+                "Ignoring stale control request for non-pending action {}",
+                request.action_id.as_str()
+            );
+            let _ = fs::remove_file(&path);
+            continue;
+        };
+
+        if !request.matches_proposal(&proposal) {
+            eprintln!(
+                "Ignoring stale or mismatched control request for {}",
+                request.action_id.as_str()
+            );
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+
+        let result = match request.decision {
+            PendingApprovalDecision::Approve => runtime
+                .approve_pending_action(&proposal, "desktop-shell-user")
+                .map(|outcome| format!("approved -> {outcome:?}")),
+            PendingApprovalDecision::Reject => runtime
+                .reject_pending_action(&proposal, "desktop-shell-user")
+                .map(|()| "rejected".to_string()),
+        };
+
+        match result {
+            Ok(message) => println!(
+                "Accepted shell decision for {}: {message}",
+                request.action_id.as_str()
+            ),
+            Err(error) => eprintln!(
+                "Runtime rejected shell decision for {}: {error:?}",
+                request.action_id.as_str()
+            ),
+        }
+
+        let _ = fs::remove_file(&path);
+        return true;
+    }
+
+    false
+}
+
+fn control_inbox_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/control-inbox-v1");
+    }
+
+    std::env::temp_dir().join("lychnos/control-inbox-v1")
+}
+
+fn clear_demo_control_inbox() {
+    let inbox = control_inbox_path();
+    let Ok(entries) = fs::read_dir(&inbox) else {
+        return;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn pause_demo() {

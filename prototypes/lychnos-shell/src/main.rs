@@ -5,17 +5,20 @@ use std::{
     fs,
     path::PathBuf,
     rc::Rc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use gtk::{
-    Application, ApplicationWindow, Box as GtkBox, DrawingArea, GestureClick, GestureDrag, Label,
-    Orientation,
+    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, GestureClick, GestureDrag,
+    Label, Orientation,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lychnos_core::{
     diagnostics::DiagnosticLevel,
-    presentation::{CompanionPresentationEnvelope, CompanionPresentationState},
+    presentation::{
+        CompanionControlEnvelope, CompanionPresentationEnvelope, CompanionPresentationState,
+        PendingApprovalControlRequest, PendingApprovalDecision, PendingApprovalPresentation,
+    },
     runtime::RuntimeMode,
 };
 
@@ -68,7 +71,7 @@ fn build_ui(app: &Application) {
     let preferences = Rc::new(RefCell::new(load_shell_preferences()));
     let dragging = Rc::new(Cell::new(false));
     let body = build_body(Rc::clone(&state), Rc::clone(&dragging));
-    let status = build_status_card(&state.borrow());
+    let status = build_status_card(Rc::clone(&state));
 
     let layout = GtkBox::new(Orientation::Vertical, 8);
     layout.set_halign(gtk::Align::Center);
@@ -881,9 +884,13 @@ struct StatusCard {
     card: GtkBox,
     mode_label: Label,
     detail_label: Label,
+    approval_box: GtkBox,
+    approve_button: Button,
+    reject_button: Button,
+    submitted_binding: Rc<RefCell<Option<String>>>,
 }
 
-fn build_status_card(state: &CompanionPresentationState) -> StatusCard {
+fn build_status_card(state: Rc<RefCell<CompanionPresentationState>>) -> StatusCard {
     let card = GtkBox::new(Orientation::Vertical, 2);
     card.add_css_class("status-card");
 
@@ -895,31 +902,136 @@ fn build_status_card(state: &CompanionPresentationState) -> StatusCard {
 
     let detail_label = Label::new(None);
     detail_label.add_css_class("detail-label");
-    detail_label.set_max_width_chars(34);
+    detail_label.set_max_width_chars(38);
     detail_label.set_wrap(true);
+
+    let approval_box = GtkBox::new(Orientation::Horizontal, 6);
+    approval_box.add_css_class("approval-controls");
+
+    let reject_button = Button::with_label("Reject");
+    reject_button.add_css_class("approval-reject");
+
+    let approve_button = Button::with_label("Approve");
+    approve_button.add_css_class("approval-approve");
+
+    approval_box.append(&reject_button);
+    approval_box.append(&approve_button);
 
     card.append(&title);
     card.append(&mode_label);
     card.append(&detail_label);
+    card.append(&approval_box);
+
+    let submitted_binding = Rc::new(RefCell::new(None));
+
+    {
+        let state = Rc::clone(&state);
+        let detail_label = detail_label.clone();
+        let approve_button = approve_button.clone();
+        let reject_button = reject_button.clone();
+        let submitted_binding = Rc::clone(&submitted_binding);
+
+        approve_button.clone().connect_clicked(move |_| {
+            let approval = state.borrow().pending_approvals.first().cloned();
+            let Some(approval) = approval else {
+                return;
+            };
+
+            match emit_pending_approval_control(&approval, PendingApprovalDecision::Approve) {
+                Ok(()) => {
+                    *submitted_binding.borrow_mut() = Some(approval.proposal_binding);
+                    approve_button.set_sensitive(false);
+                    reject_button.set_sensitive(false);
+                    detail_label.set_label("Approval sent · waiting for runtime");
+                }
+                Err(error) => {
+                    detail_label.set_label(&format!("Could not send approval · {error}"));
+                }
+            }
+        });
+    }
+
+    {
+        let state = Rc::clone(&state);
+        let detail_label = detail_label.clone();
+        let approve_button = approve_button.clone();
+        let reject_button = reject_button.clone();
+        let submitted_binding = Rc::clone(&submitted_binding);
+
+        reject_button.clone().connect_clicked(move |_| {
+            let approval = state.borrow().pending_approvals.first().cloned();
+            let Some(approval) = approval else {
+                return;
+            };
+
+            match emit_pending_approval_control(&approval, PendingApprovalDecision::Reject) {
+                Ok(()) => {
+                    *submitted_binding.borrow_mut() = Some(approval.proposal_binding);
+                    approve_button.set_sensitive(false);
+                    reject_button.set_sensitive(false);
+                    detail_label.set_label("Rejection sent · waiting for runtime");
+                }
+                Err(error) => {
+                    detail_label.set_label(&format!("Could not send rejection · {error}"));
+                }
+            }
+        });
+    }
 
     let widgets = StatusCard {
         card,
         mode_label,
         detail_label,
+        approval_box,
+        approve_button,
+        reject_button,
+        submitted_binding,
     };
-    update_status_card(&widgets, state);
+    update_status_card(&widgets, &state.borrow());
     widgets
 }
 
 fn update_status_card(widgets: &StatusCard, state: &CompanionPresentationState) {
     widgets.mode_label.set_label(mode_label(state.runtime_mode));
 
-    widgets.detail_label.set_label(&status_detail(state));
+    let pending = state.pending_approvals.first();
+    widgets.approval_box.set_visible(pending.is_some());
+
+    if let Some(approval) = pending {
+        let waiting = widgets
+            .submitted_binding
+            .borrow()
+            .as_ref()
+            .is_some_and(|binding| binding == &approval.proposal_binding);
+
+        widgets.approve_button.set_sensitive(!waiting);
+        widgets.reject_button.set_sensitive(!waiting);
+
+        if waiting {
+            widgets
+                .detail_label
+                .set_label("Decision sent · waiting for runtime");
+        } else {
+            *widgets.submitted_binding.borrow_mut() = None;
+            widgets.detail_label.set_label(&status_detail(state));
+        }
+    } else {
+        *widgets.submitted_binding.borrow_mut() = None;
+        widgets.approve_button.set_sensitive(true);
+        widgets.reject_button.set_sensitive(true);
+        widgets.detail_label.set_label(&status_detail(state));
+    }
 }
 
 fn status_detail(state: &CompanionPresentationState) -> String {
     if let Some(approval) = state.pending_approvals.first() {
-        format!("Approval needed · {}", approval.reason)
+        format!(
+            "Approval needed · {}\n{} · {:?} risk · {:?} impact",
+            approval.reason,
+            approval.kind.as_str(),
+            approval.risk,
+            approval.impact
+        )
     } else if let Some(diagnostic) = state.latest_diagnostic.as_ref().filter(|diagnostic| {
         matches!(
             diagnostic.level,
@@ -965,6 +1077,41 @@ fn load_presentation_snapshot() -> Option<CompanionPresentationState> {
     CompanionPresentationEnvelope::from_json(&contents)
         .ok()
         .map(|envelope| envelope.state)
+}
+
+fn control_inbox_path() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join("lychnos/control-inbox-v1");
+    }
+
+    std::env::temp_dir().join("lychnos/control-inbox-v1")
+}
+
+fn emit_pending_approval_control(
+    approval: &PendingApprovalPresentation,
+    decision: PendingApprovalDecision,
+) -> Result<(), String> {
+    let request = PendingApprovalControlRequest::from_presentation(approval, decision);
+    let envelope = CompanionControlEnvelope::new(request);
+    let json = envelope
+        .to_json()
+        .map_err(|error| format!("serialize failed: {error}"))?;
+
+    let inbox = control_inbox_path();
+    fs::create_dir_all(&inbox).map_err(|error| format!("create inbox failed: {error}"))?;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("clock failed: {error}"))?
+        .as_nanos();
+    let stem = format!("request-{}-{nanos}", std::process::id());
+    let temporary = inbox.join(format!("{stem}.json.tmp"));
+    let target = inbox.join(format!("{stem}.json"));
+
+    fs::write(&temporary, format!("{json}\n")).map_err(|error| format!("write failed: {error}"))?;
+    fs::rename(&temporary, &target).map_err(|error| format!("publish failed: {error}"))?;
+
+    Ok(())
 }
 
 fn install_live_presentation_updates(
@@ -1041,6 +1188,24 @@ fn install_css() {
             color: rgba(225, 244, 248, 0.74);
             font-size: 10px;
         }
+        .approval-controls {
+            margin-top: 6px;
+        }
+        .approval-controls button {
+            min-width: 72px;
+            padding: 5px 9px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+        .approval-approve {
+            background: rgba(33, 168, 107, 0.24);
+            border: 1px solid rgba(83, 230, 166, 0.45);
+        }
+        .approval-reject {
+            background: rgba(173, 52, 66, 0.22);
+            border: 1px solid rgba(255, 105, 120, 0.40);
+        }
         .lychnos-menu > contents {
             background: rgba(8, 15, 20, 0.97);
             border: 1px solid rgba(51, 210, 255, 0.30);
@@ -1102,6 +1267,7 @@ mod tests {
         let mut state = base_state(RuntimeMode::Normal);
         state.pending_approvals.push(PendingApprovalPresentation {
             action_id: ActionId::new("approval"),
+            proposal_binding: "binding-approval".into(),
             kind: ActionKind::new("demo.write"),
             capability: Capability::new("demo.write"),
             impact: ActionImpact::StateChanging,
@@ -1113,7 +1279,10 @@ mod tests {
             expression_from_state(&state),
             CompanionExpression::Listening
         );
-        assert_eq!(status_detail(&state), "Approval needed · Change demo state");
+        assert_eq!(
+            status_detail(&state),
+            "Approval needed · Change demo state\ndemo.write · Moderate risk · StateChanging impact"
+        );
     }
 
     #[test]

@@ -184,7 +184,11 @@ The current `CompanionPresentationState` projects runtime mode, pending approval
 
 A versioned `CompanionPresentationEnvelope` provides a serializable read-only wire contract. The current Phase 2 runtime publisher atomically writes this projection to a session-local snapshot, and presentation processes may consume that snapshot without gaining runtime authority.
 
-This allows an early visual shell to follow live core state without becoming an execution authority.
+Pending-approval controls use a separate versioned `CompanionControlEnvelope`. The shell emits only an action ID, an opaque proposal binding, and an Approve/Reject intent into a session-local inbox. The runtime owner retrieves the real pending `ActionProposal`, verifies the binding against that exact proposal, and only then invokes the existing approval or rejection boundary. The shell still receives no approval grant, executor, runtime controller, or mutation handle.
+
+The current proposal binding is a SHA-256 digest over the in-process proposal representation. It is a stale-decision/freshness guard for the Phase 2 session transport, not an authentication mechanism or persistent cross-version identifier.
+
+This allows an early visual shell to follow live core state and collect explicit user decisions without becoming an execution authority.
 
 ### visual shell prototype
 
