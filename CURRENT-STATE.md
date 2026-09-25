@@ -360,7 +360,7 @@ Implemented:
 - GTK4 + gtk4-layer-shell on the Omarchy/Hyprland development machine
 - non-exclusive Wayland overlay surface anchored near the top-right
 - no keyboard interactivity and no reserved screen space
-- temporary procedural black/cyan Lychnos body
+- procedural Lychnos body refined toward the locked segmented armor-petal shell, glossy black face disc, cyan expressions, and hover ring
 - compact status card
 - distinct safe demo presentation for Normal, Game Mode, Disabled, approval-waiting, and alert states
 - dependency on `lychnos-core` presentation-domain types only

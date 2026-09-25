@@ -16,7 +16,7 @@ It may consume `CompanionPresentationState`, but it does not contain:
 - privileged helpers; or
 - direct host action methods.
 
-The current body is procedurally drawn as a temporary visual shell while the canonical body asset pipeline is validated.
+The current body is still procedurally drawn while the canonical body asset pipeline is validated, but its armor petals, glossy face disc, cyan expression, hover ring, and alert treatment now intentionally track the locked visual reference much more closely.
 ## Omarchy dependencies
 
 The development machine currently provides:
@@ -47,11 +47,12 @@ Supported demo states are `normal`, `game`, `disabled`, `approval`, and `alert`.
 - the body has a lightweight idle float/pulse animation.
 
 The preference file stores only the two presentation offsets used by this prototype.
+
 The prototype uses `gtk4-layer-shell` to float at the top-right of the desktop without reserving screen space or taking keyboard focus.
 
 It currently renders:
 
-- a compact floating black/cyan Lychnos placeholder body;
+- a compact procedural Lychnos body shaped around the locked segmented-shell / glossy-face / cyan-expression visual language;
 - a read-only status card;
 - distinct Normal, Game Mode, and Disabled expressions/accents;
 - a pending-approval notification pip; and

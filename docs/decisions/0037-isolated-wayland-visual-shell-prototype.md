@@ -23,7 +23,7 @@ Current behavior:
 - anchors the body near the top-right of the desktop;
 - reserves no screen space;
 - requests no keyboard interactivity;
-- renders a temporary procedural black/cyan Lychnos body;
+- renders a temporary procedural Lychnos body that follows the locked segmented armor-petal shell, glossy face disc, cyan expression, and hover-ring language;
 - renders a compact status card;
 - supports safe demo presentation states for Normal, Game Mode, Disabled, pending approval, and alert;
 - consumes presentation-domain types only;
@@ -33,7 +33,7 @@ Current behavior:
 - includes lightweight idle float/pulse animation; and
 - performs no host monitoring or execution.
 
-The procedural body is temporary. Canonical body-asset loading will be integrated only after the asset-loading path is validated rather than silently replacing the canonical design.
+The procedural body is temporary. It may be refined to mirror the locked reference, but canonical body-asset loading will be integrated only after the asset-loading path is validated rather than silently redefining the canonical design.
 
 ## Security Boundary
 
