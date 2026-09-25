@@ -3,6 +3,8 @@ name = "lychnos-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 lychnos-core = { path = "../lychnos-core" }
