@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     env,
     fs::OpenOptions,
     path::PathBuf,
@@ -9,10 +10,7 @@ use std::{
 };
 
 use lychnos_core::{
-    initiative::{
-        InitiativeCandidate, InitiativeContext, InitiativePriority, InitiativeProvider,
-        InitiativeTrigger,
-    },
+    initiative::{InitiativeCandidate, InitiativeContext, InitiativePriority, InitiativeProvider},
     interaction::{
         ConversationProvider, ConversationRequest, ConversationResponse, MockConversationProvider,
     },
@@ -23,6 +21,13 @@ use serde_json::{Value, json};
 const DEFAULT_PORT: u16 = 18_181;
 const DEFAULT_CONTEXT_TOKENS: u32 = 8_192;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const MAX_SESSION_MESSAGES: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionMessage {
+    role: &'static str,
+    content: String,
+}
 
 pub enum RuntimeBrain {
     Local(LlamaLocalBrain),
@@ -44,6 +49,20 @@ impl RuntimeBrain {
         match self {
             Self::Local(local) => local.description(),
             Self::Mock(_) => "local-mock".into(),
+        }
+    }
+
+    pub fn record_proactive_surface(&self, message: &str) -> Result<(), String> {
+        match self {
+            Self::Local(local) => local.append_proactive_surface(message),
+            Self::Mock(_) => Ok(()),
+        }
+    }
+
+    pub fn has_session_context(&self) -> bool {
+        match self {
+            Self::Local(local) => local.has_session_context(),
+            Self::Mock(_) => false,
         }
     }
 }
@@ -85,6 +104,7 @@ pub struct LlamaLocalBrain {
     endpoint: String,
     api_key: String,
     user_suffix: Option<String>,
+    session_messages: Mutex<VecDeque<SessionMessage>>,
     child: Mutex<Option<Child>>,
 }
 
@@ -179,6 +199,7 @@ impl LlamaLocalBrain {
             endpoint,
             api_key,
             user_suffix,
+            session_messages: Mutex::new(VecDeque::new()),
             child: Mutex::new(Some(child)),
         };
 
@@ -226,21 +247,41 @@ impl LlamaLocalBrain {
         }
     }
 
-    fn chat(&self, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
+    fn chat(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        include_session_context: bool,
+    ) -> Result<String, String> {
         let user = match self.user_suffix.as_deref() {
             Some(suffix) => format!("{user}\n\n{suffix}"),
             None => user.to_string(),
         };
+
+        let mut messages = vec![json!({"role": "system", "content": system})];
+
+        if include_session_context {
+            let history = self
+                .session_messages
+                .lock()
+                .map_err(|_| "local-brain session history lock poisoned".to_string())?;
+            messages.extend(history.iter().map(|message| {
+                json!({
+                    "role": message.role,
+                    "content": message.content
+                })
+            }));
+        }
+
+        messages.push(json!({"role": "user", "content": user}));
 
         let response = ureq::post(&format!("{}/v1/chat/completions", self.endpoint))
             .set("Content-Type", "application/json")
             .set("Authorization", &format!("Bearer {}", self.api_key))
             .timeout(Duration::from_secs(60))
             .send_json(json!({
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user}
-                ],
+                "messages": messages,
                 "temperature": 0.72,
                 "top_p": 0.9,
                 "max_tokens": max_tokens,
@@ -264,6 +305,53 @@ impl LlamaLocalBrain {
 
         Ok(visible)
     }
+
+    fn has_session_context(&self) -> bool {
+        self.session_messages
+            .lock()
+            .map(|history| !history.is_empty())
+            .unwrap_or(false)
+    }
+
+    fn append_session_turn(&self, user: &str, assistant: &str) -> Result<(), String> {
+        let mut history = self
+            .session_messages
+            .lock()
+            .map_err(|_| "local-brain session history lock poisoned".to_string())?;
+
+        history.push_back(SessionMessage {
+            role: "user",
+            content: user.trim().to_string(),
+        });
+        history.push_back(SessionMessage {
+            role: "assistant",
+            content: assistant.trim().to_string(),
+        });
+
+        while history.len() > MAX_SESSION_MESSAGES {
+            history.pop_front();
+        }
+
+        Ok(())
+    }
+
+    fn append_proactive_surface(&self, message: &str) -> Result<(), String> {
+        let mut history = self
+            .session_messages
+            .lock()
+            .map_err(|_| "local-brain session history lock poisoned".to_string())?;
+
+        history.push_back(SessionMessage {
+            role: "assistant",
+            content: message.trim().to_string(),
+        });
+
+        while history.len() > MAX_SESSION_MESSAGES {
+            history.pop_front();
+        }
+
+        Ok(())
+    }
 }
 
 impl ConversationProvider for LlamaLocalBrain {
@@ -275,7 +363,8 @@ impl ConversationProvider for LlamaLocalBrain {
         request: &ConversationRequest,
     ) -> Result<ConversationResponse, Self::Error> {
         let system = conversation_system_prompt(persona);
-        let text = self.chat(&system, request.text.trim(), 320)?;
+        let text = self.chat(&system, request.text.trim(), 320, true)?;
+        self.append_session_turn(request.text.trim(), &text)?;
         Ok(ConversationResponse::new(request.id.clone(), persona, text))
     }
 }
@@ -290,7 +379,8 @@ impl InitiativeProvider for LlamaLocalBrain {
     ) -> Result<Option<InitiativeCandidate>, Self::Error> {
         let system = initiative_system_prompt(persona);
         let user = format!(
-            "Runtime mode: {:?}\nInitiative mode: {:?}\nMilliseconds since user interaction: {}\nMilliseconds since last proactive surface: {:?}\nUser is interacting: {}\nPending approval exists: {}\n\nIf there is nothing genuinely useful to say, answer exactly NONE. Otherwise answer one concise sentence only.",
+            "Trigger: {:?}\nRuntime mode: {:?}\nInitiative mode: {:?}\nMilliseconds since user interaction: {}\nMilliseconds since last proactive surface: {:?}\nUser is interacting: {}\nPending approval exists: {}\n\nIf there is nothing genuinely useful to say, answer exactly NONE. Otherwise answer one concise sentence only.",
+            context.trigger,
             context.runtime_mode,
             context.initiative_mode,
             context.milliseconds_since_user_interaction,
@@ -298,17 +388,20 @@ impl InitiativeProvider for LlamaLocalBrain {
             context.user_is_interacting,
             context.has_pending_approval,
         );
-        let text = self.chat(&system, &user, 120)?;
+        let text = self.chat(&system, &user, 120, true)?;
 
         if text.trim().eq_ignore_ascii_case("NONE") {
             return Ok(None);
         }
 
         Ok(Some(InitiativeCandidate {
-            trigger: InitiativeTrigger::ScheduledCheck,
+            trigger: context.trigger,
             priority: InitiativePriority::Normal,
             message: text,
-            reason_summary: "Local brain proposed a bounded scheduled initiative candidate.".into(),
+            reason_summary: format!(
+                "Local brain proposed a bounded {:?} initiative candidate.",
+                context.trigger
+            ),
         }))
     }
 }
@@ -418,6 +511,39 @@ fn local_brain_log_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_history_is_bounded_to_six_turns() {
+        let brain = LlamaLocalBrain {
+            model_spec: "test-model".into(),
+            endpoint: "http://127.0.0.1:1".into(),
+            api_key: "test".into(),
+            user_suffix: None,
+            session_messages: Mutex::new(VecDeque::new()),
+            child: Mutex::new(None),
+        };
+
+        for index in 0..8 {
+            brain
+                .append_session_turn(&format!("user-{index}"), &format!("assistant-{index}"))
+                .expect("session turn should append");
+        }
+
+        let history = brain
+            .session_messages
+            .lock()
+            .expect("history lock should not be poisoned");
+
+        assert_eq!(history.len(), MAX_SESSION_MESSAGES);
+        assert_eq!(
+            history.front().expect("history should exist").content,
+            "user-2"
+        );
+        assert_eq!(
+            history.back().expect("history should exist").content,
+            "assistant-7"
+        );
+    }
 
     #[test]
     fn hidden_thought_is_removed_from_visible_reply() {

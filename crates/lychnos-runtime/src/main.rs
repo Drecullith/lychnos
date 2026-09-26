@@ -7,13 +7,17 @@ use std::{
     fs,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use lychnos_core::{
+    initiative::{
+        InitiativeContext, InitiativeDecision, InitiativeMode, InitiativePolicy,
+        InitiativeProvider, InitiativeTrigger,
+    },
     interaction::{
         ConversationProvider, ConversationRequest, ConversationRequestEnvelope,
-        ConversationResponseEnvelope, InteractionId, InteractionSource,
+        ConversationResponse, ConversationResponseEnvelope, InteractionId, InteractionSource,
     },
     orchestrator::FoundationRuntime,
     persona::PersonaProfile,
@@ -29,6 +33,96 @@ use lychnos_core::{
 };
 
 type Runtime = FoundationRuntime<SequenceIdProvider, SystemTimeProvider>;
+
+const INITIATIVE_IDLE_BEFORE_CHECK: Duration = Duration::from_secs(60);
+
+struct InitiativeScheduler {
+    started_at: Instant,
+    last_user_activity: Option<Instant>,
+    last_surface: Option<Instant>,
+    context_revision: u64,
+    considered_context_revision: u64,
+    pending_trigger: Option<InitiativeTrigger>,
+    mode: InitiativeMode,
+    policy: InitiativePolicy,
+}
+
+impl InitiativeScheduler {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            last_user_activity: None,
+            last_surface: None,
+            context_revision: 0,
+            considered_context_revision: 0,
+            pending_trigger: None,
+            mode: InitiativeMode::Normal,
+            policy: InitiativePolicy::default(),
+        }
+    }
+
+    fn note_user_activity(&mut self) {
+        self.last_user_activity = Some(Instant::now());
+    }
+
+    fn note_context_change(&mut self, trigger: InitiativeTrigger) {
+        self.context_revision = self.context_revision.wrapping_add(1).max(1);
+        self.pending_trigger = Some(trigger);
+    }
+
+    fn context_if_due(
+        &self,
+        runtime: &Runtime,
+        has_session_context: bool,
+    ) -> Option<InitiativeContext> {
+        if !has_session_context
+            || self.mode == InitiativeMode::Off
+            || self.context_revision == self.considered_context_revision
+        {
+            return None;
+        }
+
+        let trigger = self.pending_trigger?;
+        let now = Instant::now();
+        let last_activity = self.last_user_activity.unwrap_or(self.started_at);
+        let user_idle = now.saturating_duration_since(last_activity);
+
+        if user_idle < INITIATIVE_IDLE_BEFORE_CHECK {
+            return None;
+        }
+
+        let presentation = runtime.presentation_state();
+        if presentation.runtime_mode != lychnos_core::runtime::RuntimeMode::Normal
+            || !presentation.pending_approvals.is_empty()
+        {
+            return None;
+        }
+
+        Some(InitiativeContext {
+            trigger,
+            runtime_mode: presentation.runtime_mode,
+            initiative_mode: self.mode,
+            milliseconds_since_user_interaction: duration_millis_u64(user_idle),
+            milliseconds_since_last_surface: self
+                .last_surface
+                .map(|last| duration_millis_u64(now.saturating_duration_since(last))),
+            user_is_interacting: false,
+            has_pending_approval: false,
+        })
+    }
+
+    fn mark_checked(&mut self) {
+        self.considered_context_revision = self.context_revision;
+    }
+
+    fn mark_surface(&mut self) {
+        self.last_surface = Some(Instant::now());
+    }
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
 
 fn main() {
     println!(
@@ -65,6 +159,7 @@ fn main() {
         }
     };
     let mut active_capture: Option<audio::ActiveCapture> = None;
+    let mut initiative_scheduler = InitiativeScheduler::new();
 
     report_audio_inputs();
     ensure_runtime_directories();
@@ -79,15 +174,29 @@ fn main() {
 
     loop {
         let runtime_changed = process_control_requests(&mut runtime);
+
         process_voice_control_requests(
             &mut active_capture,
             stt.as_ref(),
             speech_output.as_ref(),
             &provider,
             &persona,
+            &mut initiative_scheduler,
         );
         enforce_voice_capture_timeout(&mut active_capture);
-        process_interaction_requests(&provider, &persona, speech_output.as_ref());
+        process_interaction_requests(
+            &provider,
+            &persona,
+            speech_output.as_ref(),
+            &mut initiative_scheduler,
+        );
+        process_initiative(
+            &runtime,
+            &provider,
+            &persona,
+            speech_output.as_ref(),
+            &mut initiative_scheduler,
+        );
 
         if runtime_changed {
             publish_snapshot(&runtime);
@@ -261,6 +370,7 @@ fn process_voice_control_requests(
     speech_output: Option<&tts::SpeechOutputWorker>,
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
+    initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&voice_control_inbox_path()) {
         let contents = match fs::read_to_string(&path) {
@@ -290,6 +400,7 @@ fn process_voice_control_requests(
         let request = envelope.request;
         match request.command {
             VoiceCaptureCommand::StartPushToTalk => {
+                initiative_scheduler.note_user_activity();
                 if active_capture.is_some() {
                     eprintln!(
                         "Ignoring PTT start {} because capture is already active",
@@ -390,6 +501,8 @@ fn process_voice_control_requests(
                             persona,
                         ) {
                             Ok((transcript, interaction_id)) => {
+                                initiative_scheduler
+                                    .note_context_change(InitiativeTrigger::ConversationFollowUp);
                                 println!(
                                     "PTT transcription · {} · {}",
                                     capture_id.as_str(),
@@ -505,6 +618,7 @@ fn process_interaction_requests(
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
+    initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&interaction_inbox_path()) {
         let contents = match fs::read_to_string(&path) {
@@ -538,6 +652,8 @@ fn process_interaction_requests(
             continue;
         }
 
+        initiative_scheduler.note_user_activity();
+
         if let Err(error) = handle_conversation_request(provider, persona, speech_output, &request)
         {
             eprintln!(
@@ -547,12 +663,73 @@ fn process_interaction_requests(
             continue;
         }
 
+        initiative_scheduler.note_context_change(InitiativeTrigger::ConversationFollowUp);
+
         println!(
             "Interaction {} handled from {:?}",
             request.id.as_str(),
             request.source
         );
         remove_request(&path);
+    }
+}
+
+fn process_initiative(
+    runtime: &Runtime,
+    provider: &local_brain::RuntimeBrain,
+    persona: &PersonaProfile,
+    speech_output: Option<&tts::SpeechOutputWorker>,
+    scheduler: &mut InitiativeScheduler,
+) {
+    let Some(context) = scheduler.context_if_due(runtime, provider.has_session_context()) else {
+        return;
+    };
+
+    scheduler.mark_checked();
+
+    let candidate = match provider.propose(persona, &context) {
+        Ok(Some(candidate)) => candidate,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("Initiative proposal failed: {error}");
+            return;
+        }
+    };
+
+    match scheduler.policy.evaluate(&context, &candidate) {
+        InitiativeDecision::Surface => {
+            let interaction_id = InteractionId::new(format!(
+                "initiative-{}-{}",
+                std::process::id(),
+                unique_nanos()
+            ));
+            let response =
+                ConversationResponse::new(interaction_id, persona, candidate.message.clone());
+
+            if let Err(error) = publish_interaction_response(&response) {
+                eprintln!("Failed to publish initiative response: {error}");
+                return;
+            }
+
+            if let Some(speech_output) = speech_output
+                && let Err(error) = speech_output.speak(candidate.message.clone())
+            {
+                eprintln!("Failed to queue proactive Lychnos speech: {error}");
+            }
+
+            if let Err(error) = provider.record_proactive_surface(&candidate.message) {
+                eprintln!("Failed to record proactive surface in session context: {error}");
+            }
+
+            scheduler.mark_surface();
+            println!(
+                "Initiative surfaced · {:?} · {}",
+                candidate.trigger, candidate.reason_summary
+            );
+        }
+        InitiativeDecision::Suppress(reason) => {
+            println!("Initiative suppressed · {reason:?}");
+        }
     }
 }
 
@@ -694,4 +871,84 @@ fn unique_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after Unix epoch")
         .as_nanos()
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+
+    fn runtime() -> Runtime {
+        FoundationRuntime::new(
+            Default::default(),
+            SequenceIdProvider::default(),
+            SystemTimeProvider,
+        )
+    }
+
+    fn idle_scheduler_with_trigger(trigger: InitiativeTrigger) -> InitiativeScheduler {
+        let mut scheduler = InitiativeScheduler::new();
+        scheduler.started_at =
+            Instant::now() - INITIATIVE_IDLE_BEFORE_CHECK - Duration::from_secs(1);
+        scheduler.note_context_change(trigger);
+        scheduler
+    }
+
+    #[test]
+    fn silence_alone_does_not_trigger_initiative() {
+        let runtime = runtime();
+        let mut scheduler = InitiativeScheduler::new();
+        scheduler.started_at =
+            Instant::now() - INITIATIVE_IDLE_BEFORE_CHECK - Duration::from_secs(1);
+
+        assert!(scheduler.context_if_due(&runtime, true).is_none());
+    }
+
+    #[test]
+    fn initiative_requires_real_session_context_and_meaningful_trigger() {
+        let runtime = runtime();
+        let scheduler = idle_scheduler_with_trigger(InitiativeTrigger::ConversationFollowUp);
+
+        assert!(scheduler.context_if_due(&runtime, false).is_none());
+        let context = scheduler
+            .context_if_due(&runtime, true)
+            .expect("meaningful triggered context should be eligible");
+        assert_eq!(context.trigger, InitiativeTrigger::ConversationFollowUp);
+    }
+
+    #[test]
+    fn initiative_scheduler_hard_suppresses_game_mode_and_disabled() {
+        let mut runtime = runtime();
+        let scheduler = idle_scheduler_with_trigger(InitiativeTrigger::ContextChange);
+
+        runtime.enter_game_mode();
+        assert!(scheduler.context_if_due(&runtime, true).is_none());
+
+        runtime.disable();
+        assert!(scheduler.context_if_due(&runtime, true).is_none());
+    }
+
+    #[test]
+    fn unchanged_context_is_considered_only_once() {
+        let runtime = runtime();
+        let mut scheduler = idle_scheduler_with_trigger(InitiativeTrigger::ConversationFollowUp);
+
+        assert!(scheduler.context_if_due(&runtime, true).is_some());
+        scheduler.mark_checked();
+        assert!(scheduler.context_if_due(&runtime, true).is_none());
+
+        scheduler.note_context_change(InitiativeTrigger::MemoryCue);
+        let context = scheduler
+            .context_if_due(&runtime, true)
+            .expect("new meaningful context should reopen consideration");
+        assert_eq!(context.trigger, InitiativeTrigger::MemoryCue);
+    }
+
+    #[test]
+    fn recent_user_activity_delays_a_meaningful_trigger() {
+        let runtime = runtime();
+        let mut scheduler = idle_scheduler_with_trigger(InitiativeTrigger::ConversationFollowUp);
+        scheduler.note_user_activity();
+
+        assert!(scheduler.context_if_due(&runtime, true).is_none());
+    }
 }

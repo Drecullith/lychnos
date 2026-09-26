@@ -4,7 +4,7 @@
 
 This document describes the current architectural baseline of Project Lychnos.
 
-Lychnos is still in its machine-independent foundation phase. Real Omarchy, Linux service, hardware, voice, AI-provider, and privileged-execution integrations are intentionally not implemented yet.
+Lychnos remains foundation-first, but Phase 2 now includes deliberately isolated live prototypes for the Omarchy shell, local voice, and a capability-aware LocalBrain adapter. Real ambient host collectors and privileged execution remain intentionally deferred behind the platform and security boundaries.
 
 ## Architectural Principles
 
@@ -194,7 +194,7 @@ This allows an early visual shell to follow live core state and collect explicit
 
 Defines provider-neutral conversation requests, responses, input provenance, and the replaceable `ConversationProvider` boundary.
 
-Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. The current `MockConversationProvider` is deterministic and local; it exists only to prove the conversation path before a real AI-provider adapter is selected.
+Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. The current Omarchy runtime now uses the real local LocalBrain adapter when available and retains `MockConversationProvider` only as a deterministic fallback.
 
 ### persona
 
@@ -207,6 +207,8 @@ The canonical `lychnos.default.v1` profile supplies the companion name, role, tr
 Defines a bounded provider-neutral path for proactive Lychnos speech. An `InitiativeProvider` may propose an inspectable message candidate, but the core-owned `InitiativePolicy` decides whether it may surface based on runtime mode, user interaction, initiative mode, priority, and cooldown.
 
 Initiative carries text only. It has no executor, approval grant, shell-command path, or mutation authority. Game Mode and Disabled mode suppress AI initiative entirely.
+
+The current runtime now drives this boundary with a conservative, context-triggered scheduler. Initiative requires real session context, an explicit unconsidered InitiativeTrigger, at least 60 seconds of user quiet, Normal runtime mode, and no pending approval. User activity only delays interruption; silence alone never creates a thought opportunity. Successful conversation turns currently create ConversationFollowUp triggers, while future collectors and durable-memory retrieval can supply diagnostic, context, or memory triggers. Unchanged context is considered at most once. Surfaced thoughts use the normal response/TTS path and are added to session context only after they were actually shown.
 
 ### intelligence
 
@@ -252,7 +254,9 @@ Defines Lychnos-owned, model-independent memory records and the `MemoryStore` in
 
 The current implementation is an in-memory store.
 
-The authoritative memory model belongs to Lychnos rather than any AI provider.
+Separately, the first LocalBrain adapter keeps a bounded six-turn session conversation window so follow-ups and initiative have natural short-term context. That transient window is cleared on runtime restart and is deliberately **not** treated as durable Lychnos memory.
+
+The authoritative persistent memory model belongs to Lychnos rather than any AI provider.
 
 ### config
 

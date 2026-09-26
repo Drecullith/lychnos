@@ -16,34 +16,32 @@ feat/phase2-approval-flow
 
 ## Current Milestone
 
-The floating Lychnos desktop shell now follows **live read-only state from a separately owned `FoundationRuntime`**.
+Lychnos now has a **real local conversational brain and local voice loop on the Omarchy development body while preserving provider-independent identity, permissions, and execution boundaries**.
 
-The runtime projects `CompanionPresentationState`, wraps it in a versioned `CompanionPresentationEnvelope`, and publishes an atomic session-local snapshot. The GTK shell consumes only that read-only projection and changes expression/status without gaining execution authority.
+The live prototype currently proves:
 
 ```text
-Normalized Event
-      |
-      v
-In-Memory Event Bus
-      |
-      v
-Mock Analyzer
-      |
-      v
-Structured Action Proposal
-      |
-      v
-Live Runtime Safety
-      |
-      v
-Permission Policy
-      |
-      v
-Mock Execution Boundary
-      |
-      v
-Security Audit Record
+Typed / Push-to-Talk input
+          |
+          v
+Local STT when needed
+          |
+          v
+Provider-neutral ConversationRequest
+          |
+          v
+Capability-aware LocalBrain
+          |
+          v
+Lychnos persona + bounded session context
+          |
+          v
+Text response + local TTS
 ```
+
+The same runtime also has a bounded initiative path. Initiative is now context-triggered: a meaningful unconsidered trigger may open one consideration window, while user idleness only determines whether interruption is appropriate. Silence alone does not cause Lychnos to invent something to say.
+
+The next architectural focus is to make Lychnos both **persistent** and **ambient** by adding durable Lychnos-owned local memory and the first real read-only context collector, without weakening the existing approval, runtime-safety, or audit boundaries.
 
 ## Implemented
 
@@ -605,7 +603,7 @@ Current expected test counts:
 
 ```text
 Core workspace:       177
-Runtime adapter tests:   7
+Runtime adapter tests:  13
 GTK shell prototype:     5
 ```
 
@@ -674,6 +672,7 @@ Accepted ADRs currently cover:
 0045 Bounded character initiative
 0046 Capability-aware intelligence routing across bodies
 0047 First LocalBrain adapter on Omarchy
+0048 Session context and context-triggered live initiative
 ```
 
 ## Intentionally Mocked
@@ -702,7 +701,7 @@ Lychnos does **not** currently have:
 - hardware telemetry
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
-- live initiative provider/runtime scheduling (the bounded core policy now exists)
+- durable Lychnos-owned memory persistence and retrieval into conversation/initiative context
 - additional LocalBrain adapters for Windows, macOS, Android, iOS, and Pocket bodies; Omarchy/Linux llama.cpp is now the first working adapter
 - portable model-manifest/package mappings for non-llama runtimes
 - real privileged execution
@@ -762,12 +761,13 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. define a portable model-manifest/catalog flow for Tiny, Compact, Standard, and Large bodies and map additional OS/mobile adapters onto it
-2. wire the bounded initiative policy into the runtime with real context and a conservative scheduler
-3. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
-4. add wake-word activation on the existing local voice pipeline
-5. add explicit intelligence/voice/persona settings and user-tunable local/account routing
-6. keep real collectors and host execution behind their adapter/security boundaries
+1. add a durable local Lychnos-owned memory backend and retrieval/context assembly without coupling memory to the active model
+2. add the first read-only ambient/context collector so initiative can react to meaningful host context rather than conversation alone
+3. define portable model-manifest/catalog mappings for additional OS/mobile/Pocket adapters
+4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
+5. add wake-word activation and explicit intelligence/voice/persona routing settings
+6. measure and enforce Game Mode suspension/unload behavior for resource-heavy local intelligence and voice components
+7. keep all real host actions behind the existing permission, approval, executor, and audit boundaries
 
 ## Hardware Context
 

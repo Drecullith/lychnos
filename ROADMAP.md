@@ -73,7 +73,9 @@ Status: **Current**
 
 Goal:
 
-Turn the foundation into a richer local development environment without yet depending on real Omarchy hooks.
+Turn the foundation into a richer local development environment while keeping real host authority behind explicit boundaries.
+
+Several interaction features originally listed in Phase 4 were deliberately pulled forward as isolated Phase 2 prototypes because they validate the provider, presentation, voice, and safety contracts without granting host execution authority. This includes the floating shell, approval UI, local STT/TTS, provider-neutral persona/interaction, capability-aware intelligence routing, the first Omarchy LocalBrain adapter, and bounded initiative.
 
 Likely work:
 
@@ -96,6 +98,13 @@ Likely work:
 - lightweight floating/idle animation plus drag-to-move, remembered presentation position, and compact/expanded status-card ergonomics for the visual prototype (implemented); canonical body-asset integration remains
 
 This phase should make it possible to exercise Lychnos behavior end to end before granting it meaningful access to the host system.
+
+Near-term Phase 2 priority now favors two foundations that make Lychnos feel persistent and ambient rather than merely conversational:
+
+- durable local Lychnos-owned memory plus retrieval/context assembly;
+- the first real read-only ambient/context collector, feeding normalized context into the existing initiative and analysis boundaries.
+
+The context-triggered initiative scheduler is intentionally conservative: meaningful context opens a consideration window, while user idleness only determines whether interruption is appropriate.
 
 ## Phase 3 — Real Omarchy and Hardware Integration
 
@@ -132,30 +141,41 @@ Performance work:
 - evaluate thermals and power usage
 - evaluate anti-cheat-sensitive coexistence carefully
 
-## Phase 4 — Interaction Layer and AI Providers
+## Phase 4 — Interaction Layer and Intelligence Providers
 
-Status: **Planned**
+Status: **Partially validated early; remaining work planned**
 
 Goal:
 
-Give Lychnos its recognizable user-facing presence while keeping provider choice replaceable.
+Complete Lychnos' recognizable user-facing presence and provider ecosystem while keeping identity, memory, safety, and initiative Lychnos-owned.
 
-Likely work:
+Pulled forward and already validated during Phase 2:
 
-- AI provider interface
-- OpenAI/ChatGPT integration
-- local-model integration
-- context assembly from Lychnos-owned memory
-- small orb / face interface
-- speech bubbles
-- microphone input
-- speech-to-text
-- text-to-speech
-- realistic voice interaction
-- explicit approval UI for proposed actions
-- clear runtime controls for Normal, Game Mode, and Disabled
+- provider-neutral conversation interface;
+- canonical provider-independent persona;
+- floating desktop body and speech-bubble/chat surface;
+- explicit approval UI;
+- microphone input and Push-to-Talk capture;
+- local Whisper speech-to-text;
+- local Piper text-to-speech;
+- spoken voice replies;
+- capability-aware LocalBrain routing;
+- first Omarchy/Linux llama.cpp LocalBrain adapter;
+- bounded, context-triggered initiative architecture;
+- Normal, Game Mode, and Disabled presentation/control behavior.
 
-The provider must remain a reasoning component, not an execution authority.
+Remaining Phase 4 work includes:
+
+- durable memory retrieval/context assembly for intelligence providers;
+- supported AccountAgentBridge integrations where provider account/subscription mechanisms permit them;
+- optional BYOK provider adapters without making paid APIs a baseline dependency;
+- wake-word activation and longer voice-session behavior;
+- user-facing intelligence, persona, voice, and output-mode settings;
+- visible provider/fallback state and degraded-mode UX;
+- additional provider/runtime adapters across supported bodies;
+- richer speech interruption/ducking and output-device behavior.
+
+The provider remains a reasoning component, never an execution authority.
 
 ## Phase 5 — Portable Lychnos and Shared Identity
 

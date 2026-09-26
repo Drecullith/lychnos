@@ -1154,9 +1154,7 @@ fn install_chat_response_updates(chat: &ChatPanel) {
     let chat = chat.clone();
 
     gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
-        let Some(pending_id) = chat.pending_request.borrow().clone() else {
-            return gtk::glib::ControlFlow::Continue;
-        };
+        let pending_id = chat.pending_request.borrow().clone();
 
         for path in interaction_response_files() {
             let contents = match fs::read_to_string(&path) {
@@ -1172,7 +1170,31 @@ fn install_chat_response_updates(chat: &ChatPanel) {
                 }
             };
 
-            if envelope.response.request_id != pending_id {
+            let is_initiative = envelope
+                .response
+                .request_id
+                .as_str()
+                .starts_with("initiative-");
+
+            if is_initiative {
+                if pending_id.is_some() {
+                    continue;
+                }
+
+                chat.panel.set_visible(true);
+                chat.transcript.set_label(&format!(
+                    "{}\n{}",
+                    envelope.response.persona_name, envelope.response.text
+                ));
+                let _ = fs::remove_file(&path);
+                break;
+            }
+
+            let Some(pending_id) = pending_id.as_ref() else {
+                continue;
+            };
+
+            if &envelope.response.request_id != pending_id {
                 continue;
             }
 
