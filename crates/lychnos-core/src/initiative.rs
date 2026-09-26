@@ -60,8 +60,17 @@ impl InitiativeCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct InitiativeObservation {
+    pub source: String,
+    pub kind: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InitiativeContext {
     pub trigger: InitiativeTrigger,
+    pub observations: Vec<InitiativeObservation>,
     pub runtime_mode: RuntimeMode,
     pub initiative_mode: InitiativeMode,
     pub milliseconds_since_user_interaction: u64,
@@ -178,6 +187,7 @@ mod tests {
     fn context() -> InitiativeContext {
         InitiativeContext {
             trigger: InitiativeTrigger::ContextChange,
+            observations: Vec::new(),
             runtime_mode: RuntimeMode::Normal,
             initiative_mode: InitiativeMode::Normal,
             milliseconds_since_user_interaction: 120_000,

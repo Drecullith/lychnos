@@ -102,7 +102,7 @@ This phase should make it possible to exercise Lychnos behavior end to end befor
 Near-term Phase 2 priority now favors two foundations that make Lychnos feel persistent and ambient rather than merely conversational:
 
 - keep durable Lychnos-owned memory conservative and user-controlled: explicit capture/filtered recall now work; next add inspection/forget controls before considering inferred memory;
-- the first real read-only ambient/context collector, feeding normalized context into the existing initiative and analysis boundaries.
+- expand carefully from the first live read-only failed-user-service health collector into additional explicitly scoped ambient context, while preserving normalized events, privacy boundaries, and Game Mode/Disabled suppression.
 
 The context-triggered initiative scheduler is intentionally conservative: meaningful context opens a consideration window, while user idleness only determines whether interruption is appropriate.
 

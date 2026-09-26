@@ -3,6 +3,7 @@ mod local_brain;
 mod memory_context;
 mod memory_store;
 mod stt;
+mod system_health;
 mod tts;
 
 use std::{
@@ -14,8 +15,8 @@ use std::{
 
 use lychnos_core::{
     initiative::{
-        InitiativeContext, InitiativeDecision, InitiativeMode, InitiativePolicy,
-        InitiativeProvider, InitiativeTrigger,
+        InitiativeContext, InitiativeDecision, InitiativeMode, InitiativeObservation,
+        InitiativePolicy, InitiativeProvider, InitiativeTrigger,
     },
     interaction::{
         ConversationProvider, ConversationRequest, ConversationRequestEnvelope,
@@ -45,6 +46,7 @@ struct InitiativeScheduler {
     context_revision: u64,
     considered_context_revision: u64,
     pending_trigger: Option<InitiativeTrigger>,
+    pending_observations: Vec<InitiativeObservation>,
     mode: InitiativeMode,
     policy: InitiativePolicy,
 }
@@ -58,6 +60,7 @@ impl InitiativeScheduler {
             context_revision: 0,
             considered_context_revision: 0,
             pending_trigger: None,
+            pending_observations: Vec::new(),
             mode: InitiativeMode::Normal,
             policy: InitiativePolicy::default(),
         }
@@ -70,6 +73,20 @@ impl InitiativeScheduler {
     fn note_context_change(&mut self, trigger: InitiativeTrigger) {
         self.context_revision = self.context_revision.wrapping_add(1).max(1);
         self.pending_trigger = Some(trigger);
+        self.pending_observations.clear();
+    }
+
+    fn note_observation(&mut self, trigger: InitiativeTrigger, observation: InitiativeObservation) {
+        self.context_revision = self.context_revision.wrapping_add(1).max(1);
+
+        if self.pending_trigger != Some(trigger) {
+            self.pending_observations.clear();
+        }
+
+        self.pending_trigger = Some(trigger);
+        if self.pending_observations.len() < 8 {
+            self.pending_observations.push(observation);
+        }
     }
 
     fn context_if_due(
@@ -77,7 +94,7 @@ impl InitiativeScheduler {
         runtime: &Runtime,
         has_session_context: bool,
     ) -> Option<InitiativeContext> {
-        if !has_session_context
+        if (!has_session_context && self.pending_observations.is_empty())
             || self.mode == InitiativeMode::Off
             || self.context_revision == self.considered_context_revision
         {
@@ -102,6 +119,7 @@ impl InitiativeScheduler {
 
         Some(InitiativeContext {
             trigger,
+            observations: self.pending_observations.clone(),
             runtime_mode: presentation.runtime_mode,
             initiative_mode: self.mode,
             milliseconds_since_user_interaction: duration_millis_u64(user_idle),
@@ -115,6 +133,8 @@ impl InitiativeScheduler {
 
     fn mark_checked(&mut self) {
         self.considered_context_revision = self.context_revision;
+        self.pending_trigger = None;
+        self.pending_observations.clear();
     }
 
     fn mark_surface(&mut self) {
@@ -176,6 +196,7 @@ fn main() {
     };
     let mut active_capture: Option<audio::ActiveCapture> = None;
     let mut initiative_scheduler = InitiativeScheduler::new();
+    let mut system_health_collector = system_health::UserServiceHealthCollector::new();
 
     report_audio_inputs();
     ensure_runtime_directories();
@@ -190,6 +211,11 @@ fn main() {
 
     loop {
         let runtime_changed = process_control_requests(&mut runtime);
+        let ambient_changed = process_system_health(
+            &mut runtime,
+            &mut system_health_collector,
+            &mut initiative_scheduler,
+        );
 
         process_voice_control_requests(
             &mut active_capture,
@@ -216,11 +242,35 @@ fn main() {
             &mut initiative_scheduler,
         );
 
-        if runtime_changed {
+        if runtime_changed || ambient_changed {
             publish_snapshot(&runtime);
         }
 
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn process_system_health(
+    runtime: &mut Runtime,
+    collector: &mut system_health::UserServiceHealthCollector,
+    scheduler: &mut InitiativeScheduler,
+) -> bool {
+    match runtime.collect_once(collector) {
+        Ok(Some(cycle)) => {
+            let observation = system_health::observation_for_event(&cycle.event);
+            println!(
+                "Ambient event · {} · {}",
+                cycle.event.kind.as_str(),
+                observation.summary
+            );
+            scheduler.note_observation(InitiativeTrigger::DiagnosticChange, observation);
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            eprintln!("System-health collector failed: {error:?}");
+            true
+        }
     }
 }
 
@@ -931,6 +981,29 @@ mod scheduler_tests {
             Instant::now() - INITIATIVE_IDLE_BEFORE_CHECK - Duration::from_secs(1);
 
         assert!(scheduler.context_if_due(&runtime, true).is_none());
+    }
+
+    #[test]
+    fn ambient_observation_can_trigger_without_session_context() {
+        let runtime = runtime();
+        let mut scheduler = InitiativeScheduler::new();
+        scheduler.started_at =
+            Instant::now() - INITIATIVE_IDLE_BEFORE_CHECK - Duration::from_secs(1);
+        scheduler.note_observation(
+            InitiativeTrigger::DiagnosticChange,
+            InitiativeObservation {
+                source: "omarchy.systemd.user".into(),
+                kind: "system.user_services.failed".into(),
+                summary: "example.service failed.".into(),
+            },
+        );
+
+        let context = scheduler
+            .context_if_due(&runtime, false)
+            .expect("ambient observation should be enough context");
+        assert_eq!(context.trigger, InitiativeTrigger::DiagnosticChange);
+        assert_eq!(context.observations.len(), 1);
+        assert!(context.observations[0].summary.contains("example.service"));
     }
 
     #[test]

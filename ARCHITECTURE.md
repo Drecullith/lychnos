@@ -72,7 +72,7 @@ Defines the machine-independent event-source boundary.
 
 Collectors produce already-normalized `Event` values before they enter the core processing path.
 
-The current `MockCollector` is deterministic and in-memory. `FoundationRuntime::collect_once(...)` suppresses collector polling whenever background work is not allowed, so Game Mode and Disabled prevent collectors from being polled.
+The deterministic `MockCollector` remains available for tests and simulations. The first real Omarchy adapter now observes failed systemd user services at a bounded cadence, normalizes only validated failed-unit names/counts into Standard-sensitivity events, and emits only meaningful state changes/recovery. It does not inspect terminal contents, process arguments, journal text, files, browser data, or keystrokes. `FoundationRuntime::collect_once(...)` suppresses collector polling whenever background work is not allowed, so Game Mode and Disabled prevent the real collector from being polled as well.
 
 ### bus
 

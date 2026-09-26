@@ -97,8 +97,17 @@ Implemented:
 - collector errors emit ordinary diagnostics while preserving the original typed collector error
 - collector failures do not fabricate security-audit records
 - deterministic tests prove recovery after an injected collector failure and continued event processing
+- first real Omarchy collector for failed systemd user-service health
+- 15-second maximum poll cadence for that body adapter
+- validated unit-name parsing only; no terminal text, process arguments, journal text, files, browser data, or keystrokes
+- healthy unchanged state emits no event
+- existing startup failures emit one current-condition event
+- failure-set changes and complete recovery emit normalized events
+- real ambient events pass through the existing FoundationRuntime collector/event/analyzer/audit simulation path
+- ambient events can provide bounded `InitiativeObservation` context under a `DiagnosticChange` trigger
+- ambient observation can open initiative without prior chat, while silence alone still cannot
 
-The collector abstraction is machine-independent. Real terminal, journal, systemd, hardware, and Omarchy-specific collectors are still intentionally deferred.
+The collector abstraction remains machine-independent. Broader terminal, journal, service, hardware, and Omarchy-specific collectors are intentionally separate future adapters.
 
 ### Event bus
 
@@ -616,7 +625,7 @@ Current expected test counts:
 
 ```text
 Core workspace:       177
-Runtime adapter tests:  26
+Runtime adapter tests:  32
 GTK shell prototype:     5
 ```
 
@@ -688,6 +697,7 @@ Accepted ADRs currently cover:
 0048 Session context and context-triggered live initiative
 0049 First durable local memory adapter
 0050 Explicit memory capture and filtered recall
+0051 First read-only ambient user-service health collector
 ```
 
 ## Intentionally Mocked
@@ -710,9 +720,9 @@ Lychnos does **not** currently have:
 
 - real terminal monitoring
 - real shell integration
-- systemd monitoring
+- broader systemd/service monitoring beyond failed user-service health
 - journal monitoring
-- Omarchy-specific collectors
+- additional Omarchy-specific collectors beyond the first user-service health adapter
 - hardware telemetry
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
