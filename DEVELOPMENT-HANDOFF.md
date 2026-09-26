@@ -10,6 +10,7 @@ Branch: `feat/phase2-approval-flow`
 
 Latest implementation milestones:
 
+- ADR 0052 Conversation output modes, chat history, and live companion activity (current physically verified UX slice; commit follows this handoff update)
 - `4d528cf Add first read-only ambient collector`
 - `0aa5c4b Add explicit durable memory recall`
 - `486a945 Add first durable local memory adapter`
@@ -21,7 +22,7 @@ Latest implementation milestones:
 - `11e2c81 Add local Lychnos speech output`
 - `b5db759 Add local push-to-talk speech recognition`
 
-Always run `git status --short --branch` before changing code. At this handoff point all implementation slices through ADR 0051 and the handoff refresh are committed and pushed; the working tree should be clean unless a later session has started new work.
+Always run `git status --short --branch` before changing code. ADR 0052 is the current physically verified interaction-UX slice. Commit/push it before starting wake-word work if this handoff is read before the commit lands.
 
 ## GitHub Repository Hygiene Audit — COMPLETE
 
@@ -35,7 +36,7 @@ Verified:
 - no exact duplicate Markdown documents;
 - continuity files have distinct roles rather than duplicated bodies;
 - ADR numbers, titles, and normalized bodies have no duplicates;
-- ADR numbering is contiguous through 0051;
+- ADR numbering is contiguous through 0052;
 - GitHub issues contain no competing project-state convention;
 - historical Phase 1 PR is not a second source of current truth;
 - continuity docs and recent ADRs were verified through the GitHub connector.
@@ -126,9 +127,15 @@ Verified:
 - pure non-speech labels such as `(upbeat music)` are filtered;
 - LocalBrain produces real non-mock replies;
 - spoken replies play locally;
-- typed and PTT use the same provider-neutral conversation path.
+- typed and PTT use the same provider-neutral conversation path;
+- chat title now correctly reports `CHAT · LOCAL BRAIN` for the real local provider;
+- multiple user/Lychnos turns remain in bounded scrollable chat history;
+- microphone/transcription/thinking/speaking progress no longer overwrites prior turns;
+- persisted `Voice · ON/OFF` lets typed messages request text-only or text + spoken replies;
+- runtime projects live Idle/Listening/Thinking/Speaking activity;
+- the Lychnos face physically verified to follow Listening -> Thinking -> Speaking -> idle/normal.
 
-Wake word is not implemented yet.
+Wake word / hands-free voice session is the next interaction slice.
 
 ## COMMITTED — Intelligence / Initiative
 
@@ -239,15 +246,15 @@ Live healthy-body test:
 
 Latest strict gate:
 
-- core: 177 tests passed;
+- core: 179 tests passed;
 - runtime: 32 tests passed;
-- shell: 5 tests passed;
+- shell: 7 tests passed;
 - strict Clippy clean.
 
-ADR hygiene after 0051:
+ADR hygiene after 0052:
 
-- 51 ADRs;
-- contiguous 0001 through 0051;
+- 52 ADRs;
+- contiguous 0001 through 0052;
 - no duplicate ADR number/title/body.
 
 ## Important Remaining Gaps
@@ -290,11 +297,11 @@ Safety/performance:
 
 Recommended next sequence:
 
-1. add explicit memory inspection + forget/tombstone controls so durable memory stays visibly user-owned and reversible;
-2. expand ambient awareness with another low-privacy-risk read-only context source before terminal-content monitoring;
-3. connect meaningful collector events into richer initiative reasoning without widening authority;
-4. begin Game Mode resource measurements before adding heavier always-on intelligence;
-5. keep wake-word/account bridges on the existing provider-neutral boundaries.
+1. implement free/local wake-word activation for `Lychnos` and reuse the existing normalized voice path;
+2. add a bounded hands-free voice-session window so wake activation can support natural back-and-forth without requiring the status card or PTT;
+3. add explicit voice-mode settings: Wake only / PTT only / Both / Voice off;
+4. then return to memory inspection + forget/tombstone controls and broader low-risk ambient context;
+5. keep AccountBridge and all host-changing actions on the existing provider-neutral and safety boundaries.
 
 A good next ambient candidate is broader user-service/system health metadata or selected hardware telemetry. Terminal content should wait for explicit scoping/privacy rules.
 
@@ -316,7 +323,7 @@ Then read:
 - `PROJECT-CANON.md`
 - `DEVELOPMENT-HANDOFF.md`
 - `CURRENT-STATE.md`
-- ADRs 0048–0051.
+- ADRs 0048–0052.
 
 ## Documentation Rule
 

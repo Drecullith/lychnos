@@ -159,6 +159,10 @@ Pulled forward and already validated during Phase 2:
 - local Whisper speech-to-text;
 - local Piper text-to-speech;
 - spoken voice replies;
+- typed-reply Voice ON/OFF output preference;
+- scrollable chat presentation history;
+- live Listening/Thinking/Speaking companion expressions;
+- real local-brain vs fallback provider labeling;
 - capability-aware LocalBrain routing;
 - first Omarchy/Linux llama.cpp LocalBrain adapter;
 - bounded, context-triggered initiative architecture;
@@ -169,9 +173,9 @@ Remaining Phase 4 work includes:
 - memory inspection/forget controls, richer relevance retrieval/consolidation, sensitive-memory policy, and provider-specific disclosure controls;
 - supported AccountAgentBridge integrations where provider account/subscription mechanisms permit them;
 - optional BYOK provider adapters without making paid APIs a baseline dependency;
-- wake-word activation and longer voice-session behavior;
-- user-facing intelligence, persona, voice, and output-mode settings;
-- visible provider/fallback state and degraded-mode UX;
+- wake-word activation and longer hands-free voice-session behavior;
+- user-facing intelligence, persona, wake-word, and broader voice-routing settings;
+- richer degraded-mode/provider-health UX beyond the now-live provider label;
 - additional provider/runtime adapters across supported bodies;
 - richer speech interruption/ducking and output-device behavior.
 

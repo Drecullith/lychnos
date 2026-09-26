@@ -19,13 +19,15 @@ use lychnos_core::{
         InitiativePolicy, InitiativeProvider, InitiativeTrigger,
     },
     interaction::{
-        ConversationProvider, ConversationRequest, ConversationRequestEnvelope,
-        ConversationResponse, ConversationResponseEnvelope, InteractionId, InteractionSource,
+        ConversationOutputMode, ConversationProvider, ConversationRequest,
+        ConversationRequestEnvelope, ConversationResponse, ConversationResponseEnvelope,
+        InteractionId, InteractionSource,
     },
     orchestrator::FoundationRuntime,
     persona::PersonaProfile,
     presentation::{
-        CompanionControlEnvelope, CompanionPresentationEnvelope, PendingApprovalDecision,
+        CompanionActivity, CompanionControlEnvelope, CompanionPresentationEnvelope,
+        PendingApprovalDecision,
     },
     providers::{SequenceIdProvider, SystemTimeProvider},
     speech::SpeechToTextProvider,
@@ -36,6 +38,22 @@ use lychnos_core::{
 };
 
 type Runtime = FoundationRuntime<SequenceIdProvider, SystemTimeProvider>;
+
+struct ConversationRuntimeContext<'a> {
+    runtime: &'a Runtime,
+    activity: &'a mut CompanionActivity,
+    provider_label: &'a str,
+    provider: &'a local_brain::RuntimeBrain,
+    persona: &'a PersonaProfile,
+    speech_output: Option<&'a tts::SpeechOutputWorker>,
+    memory_store: &'a mut Option<memory_store::JsonFileMemoryStore>,
+}
+
+impl ConversationRuntimeContext<'_> {
+    fn set_activity(&mut self, next: CompanionActivity) {
+        set_activity(self.runtime, self.activity, next, self.provider_label);
+    }
+}
 
 const INITIATIVE_IDLE_BEFORE_CHECK: Duration = Duration::from_secs(60);
 
@@ -160,6 +178,8 @@ fn main() {
     );
     let persona = PersonaProfile::lychnos_default();
     let provider = local_brain::RuntimeBrain::discover();
+    let provider_label = provider.description();
+    let mut activity = CompanionActivity::Idle;
     let stt = match stt::WhisperCppStt::discover() {
         Ok(stt) => {
             println!("Speech-to-text ready · {}", stt.description());
@@ -201,12 +221,11 @@ fn main() {
     report_audio_inputs();
     ensure_runtime_directories();
     clear_stale_voice_session_state();
-    publish_snapshot(&runtime);
+    publish_snapshot(&runtime, activity, &provider_label);
 
     println!(
         "Runtime ready · persona={} · provider={}",
-        persona.display_name,
-        provider.description()
+        persona.display_name, provider_label
     );
 
     loop {
@@ -217,33 +236,51 @@ fn main() {
             &mut initiative_scheduler,
         );
 
-        process_voice_control_requests(
+        {
+            let mut conversation = ConversationRuntimeContext {
+                runtime: &runtime,
+                activity: &mut activity,
+                provider_label: &provider_label,
+                provider: &provider,
+                persona: &persona,
+                speech_output: speech_output.as_ref(),
+                memory_store: &mut memory_store,
+            };
+
+            process_voice_control_requests(
+                &mut conversation,
+                &mut active_capture,
+                stt.as_ref(),
+                &mut initiative_scheduler,
+            );
+            process_interaction_requests(&mut conversation, &mut initiative_scheduler);
+        }
+
+        enforce_voice_capture_timeout(
+            &runtime,
+            &mut activity,
+            &provider_label,
             &mut active_capture,
-            stt.as_ref(),
-            speech_output.as_ref(),
-            &provider,
-            &persona,
-            &mut memory_store,
-            &mut initiative_scheduler,
-        );
-        enforce_voice_capture_timeout(&mut active_capture);
-        process_interaction_requests(
-            &provider,
-            &persona,
-            speech_output.as_ref(),
-            &mut memory_store,
-            &mut initiative_scheduler,
         );
         process_initiative(
             &runtime,
+            &mut activity,
+            &provider_label,
             &provider,
             &persona,
             speech_output.as_ref(),
             &mut initiative_scheduler,
         );
 
-        if runtime_changed || ambient_changed {
-            publish_snapshot(&runtime);
+        if activity == CompanionActivity::Speaking
+            && speech_output
+                .as_ref()
+                .is_none_or(|worker| !worker.is_speaking())
+        {
+            activity = CompanionActivity::Idle;
+            publish_snapshot(&runtime, activity, &provider_label);
+        } else if runtime_changed || ambient_changed {
+            publish_snapshot(&runtime, activity, &provider_label);
         }
 
         thread::sleep(Duration::from_millis(100));
@@ -384,7 +421,12 @@ fn process_control_requests(runtime: &mut Runtime) -> bool {
     runtime_changed
 }
 
-fn enforce_voice_capture_timeout(active_capture: &mut Option<audio::ActiveCapture>) {
+fn enforce_voice_capture_timeout(
+    runtime: &Runtime,
+    activity: &mut CompanionActivity,
+    provider_label: &str,
+    active_capture: &mut Option<audio::ActiveCapture>,
+) {
     const MAX_PTT_DURATION: Duration = Duration::from_secs(60);
 
     if !active_capture
@@ -430,15 +472,14 @@ fn enforce_voice_capture_timeout(active_capture: &mut Option<audio::ActiveCaptur
             });
         }
     }
+
+    set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
 }
 
 fn process_voice_control_requests(
+    context: &mut ConversationRuntimeContext<'_>,
     active_capture: &mut Option<audio::ActiveCapture>,
     stt: Option<&stt::WhisperCppStt>,
-    speech_output: Option<&tts::SpeechOutputWorker>,
-    provider: &local_brain::RuntimeBrain,
-    persona: &PersonaProfile,
-    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
     initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&voice_control_inbox_path()) {
@@ -496,6 +537,7 @@ fn process_voice_control_requests(
                                 detail: format!("Listening on {}", capture.device.display_name),
                             });
                             *active_capture = Some(capture);
+                            context.set_activity(CompanionActivity::Listening);
                         }
                         Err(error) => {
                             eprintln!(
@@ -511,6 +553,7 @@ fn process_voice_control_requests(
                                 interaction_id: None,
                                 detail: format!("Could not start microphone: {error}"),
                             });
+                            context.set_activity(CompanionActivity::Idle);
                         }
                     }
                 }
@@ -561,15 +604,9 @@ fn process_voice_control_requests(
                             interaction_id: None,
                             detail: "Transcribing locally with Whisper.".into(),
                         });
+                        context.set_activity(CompanionActivity::Thinking);
 
-                        match handle_completed_voice_turn(
-                            &completed,
-                            stt,
-                            speech_output,
-                            provider,
-                            persona,
-                            memory_store,
-                        ) {
+                        match handle_completed_voice_turn(context, &completed, stt) {
                             Ok((transcript, interaction_id)) => {
                                 initiative_scheduler
                                     .note_context_change(InitiativeTrigger::ConversationFollowUp);
@@ -589,6 +626,7 @@ fn process_voice_control_requests(
                                 });
                             }
                             Err(error) => {
+                                context.set_activity(CompanionActivity::Idle);
                                 eprintln!(
                                     "PTT transcription {} failed: {error}",
                                     capture_id.as_str()
@@ -613,6 +651,7 @@ fn process_voice_control_requests(
                         }
                     }
                     Err(error) => {
+                        context.set_activity(CompanionActivity::Idle);
                         eprintln!(
                             "PTT capture {} failed to stop cleanly: {error}",
                             request.capture_id.as_str()
@@ -636,12 +675,9 @@ fn process_voice_control_requests(
 }
 
 fn handle_completed_voice_turn(
+    context: &mut ConversationRuntimeContext<'_>,
     completed: &audio::CompletedCapture,
     stt: Option<&stt::WhisperCppStt>,
-    speech_output: Option<&tts::SpeechOutputWorker>,
-    provider: &local_brain::RuntimeBrain,
-    persona: &PersonaProfile,
-    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
 ) -> Result<(String, InteractionId), String> {
     let stt = stt.ok_or_else(|| {
         "local STT is not installed; run scripts/install-local-stt.sh".to_string()
@@ -660,43 +696,61 @@ fn handle_completed_voice_turn(
         text.clone(),
     );
 
-    handle_conversation_request(provider, persona, speech_output, memory_store, &request)?;
+    handle_conversation_request(context, &request)?;
 
     Ok((text, interaction_id))
 }
 
 fn handle_conversation_request(
-    provider: &local_brain::RuntimeBrain,
-    persona: &PersonaProfile,
-    speech_output: Option<&tts::SpeechOutputWorker>,
-    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
+    context: &mut ConversationRuntimeContext<'_>,
     request: &ConversationRequest,
 ) -> Result<(), String> {
-    let context = memory_context::prepare_conversation_context(memory_store.as_mut(), request)?;
+    let assembled =
+        memory_context::prepare_conversation_context(context.memory_store.as_mut(), request)?;
 
-    for notice in &context.runtime_notices {
+    for notice in &assembled.runtime_notices {
         println!("Conversation context · {notice}");
     }
 
-    let response = provider.respond(persona, &context, request)?;
+    context.set_activity(CompanionActivity::Thinking);
 
-    publish_interaction_response(&response)?;
-
-    if request.source != InteractionSource::Typed
-        && let Some(speech_output) = speech_output
-        && let Err(error) = speech_output.speak(response.text.clone())
+    let response = match context
+        .provider
+        .respond(context.persona, &assembled, request)
     {
-        eprintln!("Failed to queue spoken Lychnos reply: {error}");
+        Ok(response) => response,
+        Err(error) => {
+            context.set_activity(CompanionActivity::Idle);
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = publish_interaction_response(&response) {
+        context.set_activity(CompanionActivity::Idle);
+        return Err(error);
+    }
+
+    if request.output_mode == ConversationOutputMode::TextAndSpeech {
+        if let Some(speech_output) = context.speech_output {
+            match speech_output.speak(response.text.clone()) {
+                Ok(()) => context.set_activity(CompanionActivity::Speaking),
+                Err(error) => {
+                    eprintln!("Failed to queue spoken Lychnos reply: {error}");
+                    context.set_activity(CompanionActivity::Idle);
+                }
+            }
+        } else {
+            context.set_activity(CompanionActivity::Idle);
+        }
+    } else {
+        context.set_activity(CompanionActivity::Idle);
     }
 
     Ok(())
 }
 
 fn process_interaction_requests(
-    provider: &local_brain::RuntimeBrain,
-    persona: &PersonaProfile,
-    speech_output: Option<&tts::SpeechOutputWorker>,
-    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
+    context: &mut ConversationRuntimeContext<'_>,
     initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&interaction_inbox_path()) {
@@ -733,9 +787,7 @@ fn process_interaction_requests(
 
         initiative_scheduler.note_user_activity();
 
-        if let Err(error) =
-            handle_conversation_request(provider, persona, speech_output, memory_store, &request)
-        {
+        if let Err(error) = handle_conversation_request(context, &request) {
             eprintln!(
                 "Failed to handle interaction {}: {error}",
                 request.id.as_str()
@@ -756,6 +808,8 @@ fn process_interaction_requests(
 
 fn process_initiative(
     runtime: &Runtime,
+    activity: &mut CompanionActivity,
+    provider_label: &str,
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
@@ -766,12 +820,22 @@ fn process_initiative(
     };
 
     scheduler.mark_checked();
+    set_activity(
+        runtime,
+        activity,
+        CompanionActivity::Thinking,
+        provider_label,
+    );
 
     let candidate = match provider.propose(persona, &context) {
         Ok(Some(candidate)) => candidate,
-        Ok(None) => return,
+        Ok(None) => {
+            set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
+            return;
+        }
         Err(error) => {
             eprintln!("Initiative proposal failed: {error}");
+            set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
             return;
         }
     };
@@ -788,13 +852,25 @@ fn process_initiative(
 
             if let Err(error) = publish_interaction_response(&response) {
                 eprintln!("Failed to publish initiative response: {error}");
+                set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
                 return;
             }
 
-            if let Some(speech_output) = speech_output
-                && let Err(error) = speech_output.speak(candidate.message.clone())
-            {
-                eprintln!("Failed to queue proactive Lychnos speech: {error}");
+            if let Some(speech_output) = speech_output {
+                match speech_output.speak(candidate.message.clone()) {
+                    Ok(()) => set_activity(
+                        runtime,
+                        activity,
+                        CompanionActivity::Speaking,
+                        provider_label,
+                    ),
+                    Err(error) => {
+                        eprintln!("Failed to queue proactive Lychnos speech: {error}");
+                        set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
+                    }
+                }
+            } else {
+                set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
             }
 
             if let Err(error) = provider.record_proactive_surface(&candidate.message) {
@@ -808,13 +884,31 @@ fn process_initiative(
             );
         }
         InitiativeDecision::Suppress(reason) => {
+            set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
             println!("Initiative suppressed · {reason:?}");
         }
     }
 }
 
-fn publish_snapshot(runtime: &Runtime) {
-    let envelope = CompanionPresentationEnvelope::new(runtime.presentation_state());
+fn set_activity(
+    runtime: &Runtime,
+    activity: &mut CompanionActivity,
+    next: CompanionActivity,
+    provider_label: &str,
+) {
+    if *activity == next {
+        return;
+    }
+
+    *activity = next;
+    publish_snapshot(runtime, next, provider_label);
+}
+
+fn publish_snapshot(runtime: &Runtime, activity: CompanionActivity, provider_label: &str) {
+    let mut state = runtime.presentation_state();
+    state.activity = activity;
+    state.intelligence_label = provider_label.to_string();
+    let envelope = CompanionPresentationEnvelope::new(state);
     let json = envelope
         .to_json()
         .expect("presentation envelope should serialize");

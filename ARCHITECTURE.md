@@ -194,7 +194,7 @@ This allows an early visual shell to follow live core state and collect explicit
 
 Defines provider-neutral conversation requests, responses, input provenance, and the replaceable `ConversationProvider` boundary.
 
-Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. `ConversationProvider` receives a Lychnos-owned `ConversationContext` containing only context already selected by Lychnos policy; providers do not receive direct access to the underlying memory store. The current Omarchy runtime uses the real local LocalBrain adapter when available and retains `MockConversationProvider` only as a deterministic fallback.
+Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. Each `ConversationRequest` also carries an explicit output mode: typed input defaults to text-only, while Push-to-Talk, wake-word, and voice-session input default to text plus speech. Typed input may explicitly request spoken replies. `ConversationProvider` receives a Lychnos-owned `ConversationContext` containing only context already selected by Lychnos policy; providers do not receive direct access to the underlying memory store. The current Omarchy runtime uses the real local LocalBrain adapter when available and retains `MockConversationProvider` only as a deterministic fallback.
 
 ### persona
 
@@ -226,7 +226,7 @@ The first Omarchy adapter now runs a loopback-only llama.cpp child server behind
 
 It is deliberately outside the main Cargo workspace so Linux desktop native dependencies do not become requirements for the platform-independent core or its standard CI.
 
-The shell is normally non-keyboard-interactive, reserves no screen space, and renders the validated canonical Lychnos body asset with state-driven cyan expressions plus a compact status card. Opening the chat panel temporarily uses layer-shell `OnDemand` keyboard mode so the user can type, then returns to `None` when chat closes.
+The shell is normally non-keyboard-interactive, reserves no screen space, and renders the validated canonical Lychnos body asset with state-driven cyan expressions plus a compact status card. Opening the chat panel temporarily uses layer-shell `OnDemand` keyboard mode so the user can type, then returns to `None` when chat closes. The chat keeps bounded scrollable presentation history instead of overwriting previous turns, shows the real active intelligence label, persists a typed-reply Voice ON/OFF preference, and displays transient microphone/thinking/speaking state separately from actual conversation history.
 
 It follows the versioned read-only presentation snapshot produced by the separately owned runtime and sends authority-free approval and interaction requests through versioned session-local transports. The current JSON/session-file transport is intentionally replaceable and is not a final IPC decision.
 
@@ -246,7 +246,7 @@ The current Omarchy STT adapter runs multilingual whisper.cpp locally. Finalized
 
 The current Omarchy TTS adapter runs Piper locally. The canonical `lychnos.voice.default.v1` identity is currently bound to a British male medium Piper model. Voice-originated replies are published as text and also queued to a single background speech worker for synthesis and PipeWire playback; synthesized WAV files are deleted afterward.
 
-Wake-word and voice-session capture will reuse the same normalized input, STT, persona, conversation, and speech-output path.
+The runtime now also projects live `CompanionActivity::{Idle, Listening, Thinking, Speaking}` state. The shell gives this activity priority when selecting Lychnos facial expression, and the speech worker exposes when playback is actually active so Speaking returns to Idle when audio completes. Wake-word and voice-session capture will reuse the same normalized input, STT, persona, conversation, activity, and speech-output path.
 
 ### memory
 

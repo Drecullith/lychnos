@@ -17,8 +17,8 @@ use crate::{
         MockRunningWorkTransitionError, MockWorkCooperationAssessment, MockWorkCooperationRequest,
     },
     presentation::{
-        CompanionPresentationState, DiagnosticPresentation, PendingApprovalPresentation,
-        TrackedWorkPresentation,
+        CompanionActivity, CompanionPresentationState, DiagnosticPresentation,
+        PendingApprovalPresentation, TrackedWorkPresentation,
     },
     providers::{IdProvider, TimeProvider},
     runtime::{RuntimeController, RuntimeMode, RuntimeTransition, RuntimeWorkStartError},
@@ -260,6 +260,8 @@ where
             pending_approvals,
             tracked_work,
             latest_diagnostic,
+            activity: CompanionActivity::Idle,
+            intelligence_label: "FOUNDATION".into(),
         }
     }
 

@@ -170,6 +170,17 @@ impl From<&DiagnosticRecord> for DiagnosticPresentation {
     }
 }
 
+/// Current conversational/activity state projected to presentation layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionActivity {
+    #[default]
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+}
+
 /// Read-only snapshot consumed by a future desktop or portable presentation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompanionPresentationState {
@@ -178,10 +189,12 @@ pub struct CompanionPresentationState {
     pub pending_approvals: Vec<PendingApprovalPresentation>,
     pub tracked_work: Vec<TrackedWorkPresentation>,
     pub latest_diagnostic: Option<DiagnosticPresentation>,
+    pub activity: CompanionActivity,
+    pub intelligence_label: String,
 }
 
 /// Current wire schema for read-only companion presentation snapshots.
-pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
 
 /// Versioned, authority-free snapshot transported from the runtime owner to
 /// presentation processes.
@@ -360,6 +373,8 @@ mod tests {
                 component: "runtime".into(),
                 message: "example warning".into(),
             }),
+            activity: CompanionActivity::Idle,
+            intelligence_label: "FOUNDATION".into(),
         };
 
         let envelope = CompanionPresentationEnvelope::new(state.clone());
@@ -381,6 +396,8 @@ mod tests {
             pending_approvals: Vec::new(),
             tracked_work: Vec::new(),
             latest_diagnostic: None,
+            activity: CompanionActivity::Idle,
+            intelligence_label: "FOUNDATION".into(),
         };
         let mut envelope = CompanionPresentationEnvelope::new(state);
         envelope.schema_version += 1;
@@ -421,6 +438,8 @@ mod tests {
                 component: "runtime".into(),
                 message: "example".into(),
             }),
+            activity: CompanionActivity::Idle,
+            intelligence_label: "FOUNDATION".into(),
         };
 
         assert_eq!(state.pending_approval_count(), 0);

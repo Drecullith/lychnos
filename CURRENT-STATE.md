@@ -392,6 +392,13 @@ Implemented:
 - opaque SHA-256 proposal binding so stale same-ID UI decisions fail closed before runtime approval/rejection
 - runtime-side consumer that re-checks the exact live pending proposal before using existing audited approve/reject APIs
 - compact typed-chat panel with temporary on-demand keyboard focus
+- bounded scrollable in-memory chat presentation history that preserves prior user/Lychnos turns
+- transient Listening/Thinking/Speaking status shown separately from actual conversation history
+- real provider labeling (`CHAT · LOCAL BRAIN` for the active local llama.cpp brain; explicit fallback label only for the mock)
+- persisted typed-reply `Voice · ON/OFF` preference
+- explicit conversation output mode contract: typed defaults text-only; voice-originated input defaults text + speech; typed requests may opt into spoken replies
+- live read-only `CompanionActivity::{Idle, Listening, Thinking, Speaking}` projection
+- facial expressions now prioritize real Listening/Thinking/Speaking activity and return to normal after speech playback completes
 - versioned typed interaction request/response transport under the session runtime directory
 - installed `lychnos-runtime` process that owns `FoundationRuntime`, persona, approvals, presentation publication, and conversation-provider calls
 - installed launcher starts/stops/restarts both runtime and shell and reports both statuses
@@ -624,9 +631,9 @@ Implemented and synchronized:
 Current expected test counts:
 
 ```text
-Core workspace:       177
+Core workspace:       179
 Runtime adapter tests:  32
-GTK shell prototype:     5
+GTK shell prototype:     7
 ```
 
 Current quality gate:
@@ -698,6 +705,7 @@ Accepted ADRs currently cover:
 0049 First durable local memory adapter
 0050 Explicit memory capture and filtered recall
 0051 First read-only ambient user-service health collector
+0052 Conversation output modes, chat history, and live companion activity
 ```
 
 ## Intentionally Mocked
@@ -785,12 +793,12 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. add explicit memory inspection/forget controls and keep automatic/inferred memory deferred until its privacy policy is designed
-2. add the first read-only ambient/context collector so initiative can react to meaningful host context rather than conversation alone
-3. define portable model-manifest/catalog mappings for additional OS/mobile/Pocket adapters
-4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
-5. add wake-word activation and explicit intelligence/voice/persona routing settings
-6. measure and enforce Game Mode suspension/unload behavior for resource-heavy local intelligence and voice components
+1. add wake-word activation and hands-free voice-session behavior on the existing provider-neutral voice path
+2. add explicit memory inspection/forget controls and keep automatic/inferred memory deferred until its privacy policy is designed
+3. expand read-only ambient/context collection beyond the first failed-user-service health signal
+4. define portable model-manifest/catalog mappings for additional OS/mobile/Pocket adapters
+5. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms
+6. add explicit intelligence/voice/persona routing settings and measure Game Mode suspension/unload behavior for resource-heavy components
 7. keep all real host actions behind the existing permission, approval, executor, and audit boundaries
 
 ## Hardware Context

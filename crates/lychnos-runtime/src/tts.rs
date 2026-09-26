@@ -2,7 +2,11 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{self, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+    },
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -158,11 +162,14 @@ impl SpeechSynthesizer for PiperTts {
 
 pub struct SpeechOutputWorker {
     sender: Sender<String>,
+    speaking: Arc<AtomicBool>,
 }
 
 impl SpeechOutputWorker {
     pub fn start(tts: PiperTts) -> Self {
         let (sender, receiver) = mpsc::channel::<String>();
+        let speaking = Arc::new(AtomicBool::new(false));
+        let worker_speaking = Arc::clone(&speaking);
 
         thread::Builder::new()
             .name("lychnos-speech-output".into())
@@ -170,6 +177,7 @@ impl SpeechOutputWorker {
                 let voice = SpeechVoiceProfile::lychnos_default();
 
                 for text in receiver {
+                    worker_speaking.store(true, Ordering::Release);
                     let path = speech_output_path();
                     let request = SpeechSynthesisRequest::new(text, voice.clone());
 
@@ -193,17 +201,27 @@ impl SpeechOutputWorker {
                             path.display()
                         );
                     }
+
+                    worker_speaking.store(false, Ordering::Release);
                 }
             })
             .expect("Lychnos speech output worker should start");
 
-        Self { sender }
+        Self { sender, speaking }
+    }
+
+    #[must_use]
+    pub fn is_speaking(&self) -> bool {
+        self.speaking.load(Ordering::Acquire)
     }
 
     pub fn speak(&self, text: impl Into<String>) -> Result<(), String> {
-        self.sender
-            .send(text.into())
-            .map_err(|_| "speech output worker is unavailable".to_string())
+        self.speaking.store(true, Ordering::Release);
+        if self.sender.send(text.into()).is_err() {
+            self.speaking.store(false, Ordering::Release);
+            return Err("speech output worker is unavailable".to_string());
+        }
+        Ok(())
     }
 }
 

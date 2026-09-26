@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::persona::{PersonaId, PersonaProfile};
 
 /// Current wire schema for conversation requests and responses.
-pub const INTERACTION_SCHEMA_VERSION: u32 = 1;
+pub const INTERACTION_SCHEMA_VERSION: u32 = 2;
 
 /// Opaque identifier for one user interaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -39,23 +39,50 @@ pub enum InteractionSource {
     VoiceSession,
 }
 
+/// How Lychnos should present the reply for one interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationOutputMode {
+    /// Return text only.
+    #[default]
+    TextOnly,
+
+    /// Return text and also speak the reply through the active Lychnos voice.
+    TextAndSpeech,
+}
+
 /// One normalized user message entering the Lychnos interaction boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationRequest {
     pub id: InteractionId,
     pub source: InteractionSource,
+    pub output_mode: ConversationOutputMode,
     pub text: String,
 }
 
 impl ConversationRequest {
     #[must_use]
     pub fn new(id: InteractionId, source: InteractionSource, text: impl Into<String>) -> Self {
+        let output_mode = match source {
+            InteractionSource::Typed => ConversationOutputMode::TextOnly,
+            InteractionSource::PushToTalk
+            | InteractionSource::WakeWord
+            | InteractionSource::VoiceSession => ConversationOutputMode::TextAndSpeech,
+        };
+
         Self {
             id,
             source,
+            output_mode,
             text: text.into(),
         }
+    }
+
+    #[must_use]
+    pub const fn with_output_mode(mut self, output_mode: ConversationOutputMode) -> Self {
+        self.output_mode = output_mode;
+        self
     }
 
     #[must_use]
@@ -243,6 +270,35 @@ impl ConversationProvider for MockConversationProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interaction_sources_choose_sensible_default_output_modes() {
+        let typed = ConversationRequest::new(
+            InteractionId::new("typed"),
+            InteractionSource::Typed,
+            "Hello",
+        );
+        let ptt = ConversationRequest::new(
+            InteractionId::new("ptt"),
+            InteractionSource::PushToTalk,
+            "Hello",
+        );
+
+        assert_eq!(typed.output_mode, ConversationOutputMode::TextOnly);
+        assert_eq!(ptt.output_mode, ConversationOutputMode::TextAndSpeech);
+    }
+
+    #[test]
+    fn typed_output_mode_can_be_explicitly_overridden() {
+        let request = ConversationRequest::new(
+            InteractionId::new("typed"),
+            InteractionSource::Typed,
+            "Hello",
+        )
+        .with_output_mode(ConversationOutputMode::TextAndSpeech);
+
+        assert_eq!(request.output_mode, ConversationOutputMode::TextAndSpeech);
+    }
 
     #[test]
     fn typed_request_round_trips_through_versioned_envelope() {

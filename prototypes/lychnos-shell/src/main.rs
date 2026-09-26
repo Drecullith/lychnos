@@ -16,12 +16,13 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lychnos_core::{
     diagnostics::DiagnosticLevel,
     interaction::{
-        ConversationRequest, ConversationRequestEnvelope, ConversationResponseEnvelope,
-        InteractionId, InteractionSource,
+        ConversationOutputMode, ConversationRequest, ConversationRequestEnvelope,
+        ConversationResponseEnvelope, InteractionId, InteractionSource,
     },
     presentation::{
-        CompanionControlEnvelope, CompanionPresentationEnvelope, CompanionPresentationState,
-        PendingApprovalControlRequest, PendingApprovalDecision, PendingApprovalPresentation,
+        CompanionActivity, CompanionControlEnvelope, CompanionPresentationEnvelope,
+        CompanionPresentationState, PendingApprovalControlRequest, PendingApprovalDecision,
+        PendingApprovalPresentation,
     },
     runtime::RuntimeMode,
     voice::{
@@ -39,6 +40,7 @@ struct ShellPreferences {
     status_visible: bool,
     ghosted: bool,
     position_locked: bool,
+    speak_typed_replies: bool,
 }
 
 impl Default for ShellPreferences {
@@ -47,6 +49,7 @@ impl Default for ShellPreferences {
             status_visible: true,
             ghosted: false,
             position_locked: false,
+            speak_typed_replies: false,
         }
     }
 }
@@ -80,7 +83,14 @@ fn build_ui(app: &Application) {
     let dragging = Rc::new(Cell::new(false));
     let body = build_body(Rc::clone(&state), Rc::clone(&dragging));
     let status = build_status_card(Rc::clone(&state));
-    let chat = build_chat_panel();
+    let chat = build_chat_panel(Rc::clone(&preferences));
+
+    {
+        let current = state.borrow();
+        chat.title
+            .set_label(&chat_title_for_intelligence(&current.intelligence_label));
+        set_chat_activity(&chat, activity_text(current.activity));
+    }
 
     let layout = GtkBox::new(Orientation::Vertical, 8);
     layout.set_halign(gtk::Align::Center);
@@ -132,7 +142,7 @@ fn build_ui(app: &Application) {
     install_chat_controls(&window, &status, &chat);
     install_chat_response_updates(&chat);
     install_voice_status_updates(&chat);
-    install_live_presentation_updates(Rc::clone(&state), &body, &status);
+    install_live_presentation_updates(Rc::clone(&state), &body, &status, &chat);
 
     let restore_action = gtk::gio::SimpleAction::new("restore", None);
     {
@@ -536,6 +546,8 @@ fn load_shell_preferences() -> ShellPreferences {
             preferences.ghosted = value == "true";
         } else if let Some(value) = line.strip_prefix("position_locked=") {
             preferences.position_locked = value == "true";
+        } else if let Some(value) = line.strip_prefix("speak_typed_replies=") {
+            preferences.speak_typed_replies = value == "true";
         }
     }
 
@@ -554,8 +566,11 @@ fn save_shell_preferences(preferences: ShellPreferences) {
     }
 
     let contents = format!(
-        "status_visible={}\nghosted={}\nposition_locked={}\n",
-        preferences.status_visible, preferences.ghosted, preferences.position_locked
+        "status_visible={}\nghosted={}\nposition_locked={}\nspeak_typed_replies={}\n",
+        preferences.status_visible,
+        preferences.ghosted,
+        preferences.position_locked,
+        preferences.speak_typed_replies
     );
     let _ = fs::write(path, contents);
 }
@@ -874,6 +889,13 @@ fn expression_from_state(state: &CompanionPresentationState) -> CompanionExpress
         return CompanionExpression::Neutral;
     }
 
+    match state.activity {
+        CompanionActivity::Listening => return CompanionExpression::Listening,
+        CompanionActivity::Thinking => return CompanionExpression::Thinking,
+        CompanionActivity::Speaking => return CompanionExpression::Speaking,
+        CompanionActivity::Idle => {}
+    }
+
     if state.latest_diagnostic.as_ref().is_some_and(|diagnostic| {
         matches!(
             diagnostic.level,
@@ -909,7 +931,10 @@ fn expression_from_state(state: &CompanionPresentationState) -> CompanionExpress
 #[derive(Clone)]
 struct ChatPanel {
     panel: GtkBox,
+    title: Label,
     transcript: Label,
+    transcript_scroll: gtk::ScrolledWindow,
+    activity_label: Label,
     entry: Entry,
     send_button: Button,
     close_button: Button,
@@ -919,32 +944,68 @@ struct ChatPanel {
     stop_requested: Rc<Cell<bool>>,
     capture_started_at: Rc<RefCell<Option<Instant>>>,
     pending_request: Rc<RefCell<Option<InteractionId>>>,
-    last_user_text: Rc<RefCell<String>>,
+    history: Rc<RefCell<Vec<String>>>,
+    preferences: Rc<RefCell<ShellPreferences>>,
 }
 
-fn build_chat_panel() -> ChatPanel {
+fn build_chat_panel(preferences: Rc<RefCell<ShellPreferences>>) -> ChatPanel {
     let panel = GtkBox::new(Orientation::Vertical, 6);
     panel.add_css_class("chat-panel");
-    panel.set_width_request(300);
+    panel.set_width_request(320);
 
     let header = GtkBox::new(Orientation::Horizontal, 6);
-    let title = Label::new(Some("CHAT · LOCAL MOCK"));
+    let title = Label::new(Some("CHAT · CONNECTING"));
     title.add_css_class("chat-title");
     title.set_hexpand(true);
     title.set_halign(gtk::Align::Start);
+
+    let initial_speak_typed = preferences.borrow().speak_typed_replies;
+    let voice_reply_button = Button::with_label(if initial_speak_typed {
+        "Voice · ON"
+    } else {
+        "Voice · OFF"
+    });
+    voice_reply_button.add_css_class("chat-voice-toggle");
+    voice_reply_button.set_tooltip_text(Some(
+        "Speak replies to typed messages as well as showing them in chat",
+    ));
+
+    {
+        let preferences = Rc::clone(&preferences);
+        voice_reply_button.connect_clicked(move |button| {
+            let next = !preferences.borrow().speak_typed_replies;
+            preferences.borrow_mut().speak_typed_replies = next;
+            save_shell_preferences(*preferences.borrow());
+            button.set_label(if next { "Voice · ON" } else { "Voice · OFF" });
+        });
+    }
 
     let close_button = Button::with_label("×");
     close_button.add_css_class("chat-close");
 
     header.append(&title);
+    header.append(&voice_reply_button);
     header.append(&close_button);
 
     let transcript = Label::new(Some("Lychnos\nI'm here."));
     transcript.add_css_class("chat-transcript");
     transcript.set_wrap(true);
-    transcript.set_max_width_chars(42);
+    transcript.set_max_width_chars(44);
     transcript.set_xalign(0.0);
+    transcript.set_yalign(0.0);
     transcript.set_selectable(true);
+
+    let transcript_scroll = gtk::ScrolledWindow::new();
+    transcript_scroll.add_css_class("chat-scroll");
+    transcript_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    transcript_scroll.set_min_content_height(150);
+    transcript_scroll.set_max_content_height(260);
+    transcript_scroll.set_child(Some(&transcript));
+
+    let activity_label = Label::new(None);
+    activity_label.add_css_class("chat-activity");
+    activity_label.set_xalign(0.0);
+    activity_label.set_wrap(true);
 
     let ptt_surface = GtkBox::new(Orientation::Horizontal, 0);
     ptt_surface.add_css_class("chat-ptt");
@@ -969,13 +1030,17 @@ fn build_chat_panel() -> ChatPanel {
     input_row.append(&send_button);
 
     panel.append(&header);
-    panel.append(&transcript);
+    panel.append(&transcript_scroll);
+    panel.append(&activity_label);
     panel.append(&ptt_surface);
     panel.append(&input_row);
 
     ChatPanel {
         panel,
+        title,
         transcript,
+        transcript_scroll,
+        activity_label,
         entry,
         send_button,
         close_button,
@@ -985,8 +1050,37 @@ fn build_chat_panel() -> ChatPanel {
         stop_requested: Rc::new(Cell::new(false)),
         capture_started_at: Rc::new(RefCell::new(None)),
         pending_request: Rc::new(RefCell::new(None)),
-        last_user_text: Rc::new(RefCell::new(String::new())),
+        history: Rc::new(RefCell::new(vec!["Lychnos\nI'm here.".into()])),
+        preferences,
     }
+}
+
+fn append_chat_history(chat: &ChatPanel, speaker: &str, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+
+    {
+        let mut history = chat.history.borrow_mut();
+        history.push(format!("{speaker}\n{text}"));
+        const MAX_HISTORY_ENTRIES: usize = 80;
+        if history.len() > MAX_HISTORY_ENTRIES {
+            let excess = history.len() - MAX_HISTORY_ENTRIES;
+            history.drain(0..excess);
+        }
+        chat.transcript.set_label(&history.join("\n\n"));
+    }
+
+    let adjustment = chat.transcript_scroll.vadjustment();
+    gtk::glib::idle_add_local_once(move || {
+        let bottom = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+        adjustment.set_value(bottom);
+    });
+}
+
+fn set_chat_activity(chat: &ChatPanel, text: &str) {
+    chat.activity_label.set_label(text);
 }
 
 fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: &ChatPanel) {
@@ -1019,7 +1113,7 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
 
     {
         let ptt_label = chat.ptt_label.clone();
-        let transcript = chat.transcript.clone();
+        let activity_label = chat.activity_label.clone();
         let active_capture = Rc::clone(&chat.active_capture);
         let stop_requested = Rc::clone(&chat.stop_requested);
         let capture_started_at = Rc::clone(&chat.capture_started_at);
@@ -1032,7 +1126,7 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
             let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
                 Ok(duration) => duration.as_nanos(),
                 Err(error) => {
-                    transcript.set_label(&format!("Lychnos\nMicrophone clock error · {error}"));
+                    activity_label.set_label(&format!("Microphone clock error · {error}"));
                     return;
                 }
             };
@@ -1044,11 +1138,11 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
                     stop_requested.set(false);
                     *capture_started_at.borrow_mut() = None;
                     ptt_label.set_label("Starting microphone…");
-                    transcript.set_label("Lychnos\nStarting microphone…");
+                    activity_label.set_label("Starting microphone…");
                 }
                 Err(error) => {
                     ptt_label.set_label("Hold to Talk");
-                    transcript.set_label(&format!("Lychnos\nCouldn't start microphone · {error}"));
+                    activity_label.set_label(&format!("Couldn't start microphone · {error}"));
                 }
             }
         });
@@ -1056,23 +1150,33 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
 
     {
         let ptt_label = chat.ptt_label.clone();
-        let transcript = chat.transcript.clone();
+        let activity_label = chat.activity_label.clone();
         let active_capture = Rc::clone(&chat.active_capture);
         let stop_requested = Rc::clone(&chat.stop_requested);
 
         ptt_gesture.connect_released(move |_, _, _, _| {
-            finish_ptt_from_ui(&ptt_label, &transcript, &active_capture, &stop_requested);
+            finish_ptt_from_ui(
+                &ptt_label,
+                &activity_label,
+                &active_capture,
+                &stop_requested,
+            );
         });
     }
 
     {
         let ptt_label = chat.ptt_label.clone();
-        let transcript = chat.transcript.clone();
+        let activity_label = chat.activity_label.clone();
         let active_capture = Rc::clone(&chat.active_capture);
         let stop_requested = Rc::clone(&chat.stop_requested);
 
         ptt_gesture.connect_unpaired_release(move |_, _, _, _, _| {
-            finish_ptt_from_ui(&ptt_label, &transcript, &active_capture, &stop_requested);
+            finish_ptt_from_ui(
+                &ptt_label,
+                &activity_label,
+                &active_capture,
+                &stop_requested,
+            );
         });
     }
 
@@ -1095,7 +1199,7 @@ fn install_chat_controls(window: &ApplicationWindow, status: &StatusCard, chat: 
 
 fn finish_ptt_from_ui(
     ptt_label: &Label,
-    transcript: &Label,
+    activity_label: &Label,
     active_capture: &Rc<RefCell<Option<VoiceCaptureId>>>,
     stop_requested: &Rc<Cell<bool>>,
 ) {
@@ -1112,11 +1216,11 @@ fn finish_ptt_from_ui(
         Ok(()) => {
             stop_requested.set(true);
             ptt_label.set_label("Stopping microphone…");
-            transcript.set_label("Lychnos\nFinishing voice capture…");
+            activity_label.set_label("Finishing voice capture…");
         }
         Err(error) => {
             ptt_label.set_label("Hold to Talk");
-            transcript.set_label(&format!("Lychnos\nCouldn't stop microphone · {error}"));
+            activity_label.set_label(&format!("Couldn't stop microphone · {error}"));
             *active_capture.borrow_mut() = None;
             stop_requested.set(false);
         }
@@ -1133,19 +1237,28 @@ fn submit_chat_message(chat: &ChatPanel) {
         return;
     }
 
-    match emit_typed_interaction(&text) {
+    let output_mode = if chat.preferences.borrow().speak_typed_replies {
+        ConversationOutputMode::TextAndSpeech
+    } else {
+        ConversationOutputMode::TextOnly
+    };
+
+    match emit_typed_interaction(&text, output_mode) {
         Ok(request_id) => {
             *chat.pending_request.borrow_mut() = Some(request_id);
-            *chat.last_user_text.borrow_mut() = text.clone();
-            chat.transcript
-                .set_label(&format!("You\n{text}\n\nLychnos\nThinking…"));
+            append_chat_history(chat, "You", &text);
+            set_chat_activity(chat, "Thinking…");
             chat.entry.set_text("");
             chat.entry.set_sensitive(false);
             chat.send_button.set_sensitive(false);
         }
         Err(error) => {
-            chat.transcript
-                .set_label(&format!("Lychnos\nCouldn't send that message · {error}"));
+            append_chat_history(
+                chat,
+                "Lychnos",
+                &format!("Couldn't send that message · {error}"),
+            );
+            set_chat_activity(chat, "");
         }
     }
 }
@@ -1182,10 +1295,12 @@ fn install_chat_response_updates(chat: &ChatPanel) {
                 }
 
                 chat.panel.set_visible(true);
-                chat.transcript.set_label(&format!(
-                    "{}\n{}",
-                    envelope.response.persona_name, envelope.response.text
-                ));
+                append_chat_history(
+                    &chat,
+                    &envelope.response.persona_name,
+                    &envelope.response.text,
+                );
+                set_chat_activity(&chat, "");
                 let _ = fs::remove_file(&path);
                 break;
             }
@@ -1198,11 +1313,12 @@ fn install_chat_response_updates(chat: &ChatPanel) {
                 continue;
             }
 
-            let user_text = chat.last_user_text.borrow().clone();
-            chat.transcript.set_label(&format!(
-                "You\n{user_text}\n\n{}\n{}",
-                envelope.response.persona_name, envelope.response.text
-            ));
+            append_chat_history(
+                &chat,
+                &envelope.response.persona_name,
+                &envelope.response.text,
+            );
+            set_chat_activity(&chat, "");
             *chat.pending_request.borrow_mut() = None;
             chat.entry.set_sensitive(true);
             chat.send_button.set_sensitive(true);
@@ -1235,27 +1351,28 @@ fn install_voice_status_updates(chat: &ChatPanel) {
                             chat.ptt_label.set_label("Stopping microphone…");
                         } else {
                             chat.ptt_label.set_label("● Listening… release to stop");
-                            chat.transcript
-                                .set_label("Lychnos\nMicrophone active · speak now.");
+                            set_chat_activity(&chat, "● Listening… speak now.");
                         }
                     }
                     VoiceCaptureState::Stopped => {
                         let duration_ms = envelope.status.duration_ms.unwrap_or_default();
                         let bytes = envelope.status.captured_bytes.unwrap_or_default();
                         chat.ptt_label.set_label("Hold to Talk");
-                        chat.transcript.set_label(&format!(
-                            "Lychnos\nVoice captured · {:.1}s · {:.1} KiB",
-                            duration_ms as f64 / 1000.0,
-                            bytes as f64 / 1024.0
-                        ));
+                        set_chat_activity(
+                            &chat,
+                            &format!(
+                                "Voice captured · {:.1}s · {:.1} KiB",
+                                duration_ms as f64 / 1000.0,
+                                bytes as f64 / 1024.0
+                            ),
+                        );
                         *chat.active_capture.borrow_mut() = None;
                         *chat.capture_started_at.borrow_mut() = None;
                         chat.stop_requested.set(false);
                     }
                     VoiceCaptureState::Transcribing => {
                         chat.ptt_label.set_label("Transcribing locally…");
-                        chat.transcript
-                            .set_label("Lychnos\nTranscribing your voice locally…");
+                        set_chat_activity(&chat, "Transcribing your voice locally…");
                     }
                     VoiceCaptureState::Transcribed => {
                         let transcript = envelope.status.transcript.clone().unwrap_or_default();
@@ -1268,29 +1385,26 @@ fn install_voice_status_updates(chat: &ChatPanel) {
 
                         if let Some(interaction_id) = interaction_id {
                             *chat.pending_request.borrow_mut() = Some(interaction_id);
-                            *chat.last_user_text.borrow_mut() = transcript.clone();
-                            chat.transcript
-                                .set_label(&format!("You\n{transcript}\n\nLychnos\nThinking…"));
+                            append_chat_history(&chat, "You", &transcript);
+                            set_chat_activity(&chat, "Thinking…");
                         } else {
-                            chat.transcript.set_label(&format!(
-                                "You\n{transcript}\n\nLychnos\nTranscript ready."
-                            ));
+                            append_chat_history(&chat, "You", &transcript);
+                            set_chat_activity(&chat, "Transcript ready.");
                         }
                     }
                     VoiceCaptureState::Failed => {
                         chat.ptt_label.set_label("Hold to Talk");
-                        chat.transcript.set_label(&format!(
-                            "Lychnos\nMicrophone failed · {}",
-                            envelope.status.detail
-                        ));
+                        set_chat_activity(
+                            &chat,
+                            &format!("Microphone failed · {}", envelope.status.detail),
+                        );
                         *chat.active_capture.borrow_mut() = None;
                         *chat.capture_started_at.borrow_mut() = None;
                         chat.stop_requested.set(false);
                     }
                     VoiceCaptureState::TimedOut => {
                         chat.ptt_label.set_label("Hold to Talk");
-                        chat.transcript
-                            .set_label("Lychnos\nVoice capture stopped at the 60s safety limit.");
+                        set_chat_activity(&chat, "Voice capture stopped at the 60s safety limit.");
                         *chat.active_capture.borrow_mut() = None;
                         *chat.capture_started_at.borrow_mut() = None;
                         chat.stop_requested.set(false);
@@ -1496,6 +1610,8 @@ fn default_presentation_state() -> CompanionPresentationState {
         pending_approvals: Vec::new(),
         tracked_work: Vec::new(),
         latest_diagnostic: None,
+        activity: CompanionActivity::Idle,
+        intelligence_label: "CONNECTING".into(),
     }
 }
 
@@ -1596,13 +1712,17 @@ fn interaction_outbox_path() -> PathBuf {
     std::env::temp_dir().join("lychnos/interaction-outbox-v1")
 }
 
-fn emit_typed_interaction(text: &str) -> Result<InteractionId, String> {
+fn emit_typed_interaction(
+    text: &str,
+    output_mode: ConversationOutputMode,
+) -> Result<InteractionId, String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("clock failed: {error}"))?
         .as_nanos();
     let request_id = InteractionId::new(format!("typed-{}-{nanos}", std::process::id()));
-    let request = ConversationRequest::new(request_id.clone(), InteractionSource::Typed, text);
+    let request = ConversationRequest::new(request_id.clone(), InteractionSource::Typed, text)
+        .with_output_mode(output_mode);
     let envelope = ConversationRequestEnvelope::new(request);
     let json = envelope
         .to_json()
@@ -1669,9 +1789,11 @@ fn install_live_presentation_updates(
     state: Rc<RefCell<CompanionPresentationState>>,
     body: &DrawingArea,
     status: &StatusCard,
+    chat: &ChatPanel,
 ) {
     let body = body.clone();
     let status = status.clone();
+    let chat = chat.clone();
 
     gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
         let Some(next_state) = load_presentation_snapshot() else {
@@ -1685,12 +1807,38 @@ fn install_live_presentation_updates(
 
         if changed {
             *state.borrow_mut() = next_state;
-            update_status_card(&status, &state.borrow());
+            let current = state.borrow();
+            update_status_card(&status, &current);
+            chat.title
+                .set_label(&chat_title_for_intelligence(&current.intelligence_label));
+            set_chat_activity(&chat, activity_text(current.activity));
             body.queue_draw();
         }
 
         gtk::glib::ControlFlow::Continue
     });
+}
+
+fn chat_title_for_intelligence(label: &str) -> String {
+    let lower = label.to_ascii_lowercase();
+    if lower.contains("mock") {
+        "CHAT · FALLBACK MOCK".into()
+    } else if lower.contains("llama") || lower.contains("local") {
+        "CHAT · LOCAL BRAIN".into()
+    } else if label.trim().is_empty() {
+        "CHAT · CONNECTING".into()
+    } else {
+        format!("CHAT · {}", label.trim())
+    }
+}
+
+fn activity_text(activity: CompanionActivity) -> &'static str {
+    match activity {
+        CompanionActivity::Idle => "",
+        CompanionActivity::Listening => "● Listening…",
+        CompanionActivity::Thinking => "Thinking…",
+        CompanionActivity::Speaking => "Speaking…",
+    }
 }
 
 fn mode_accent(mode: RuntimeMode, alert: bool) -> (f64, f64, f64) {
@@ -1847,7 +1995,38 @@ mod tests {
             pending_approvals: Vec::new(),
             tracked_work: Vec::new(),
             latest_diagnostic: None,
+            activity: CompanionActivity::Idle,
+            intelligence_label: "local llama.cpp · test-model".into(),
         }
+    }
+
+    #[test]
+    fn conversational_activity_drives_live_expression() {
+        let mut state = base_state(RuntimeMode::Normal);
+
+        state.activity = CompanionActivity::Listening;
+        assert_eq!(
+            expression_from_state(&state),
+            CompanionExpression::Listening
+        );
+
+        state.activity = CompanionActivity::Thinking;
+        assert_eq!(expression_from_state(&state), CompanionExpression::Thinking);
+
+        state.activity = CompanionActivity::Speaking;
+        assert_eq!(expression_from_state(&state), CompanionExpression::Speaking);
+    }
+
+    #[test]
+    fn chat_title_reports_real_local_brain_and_explicit_mock_fallback() {
+        assert_eq!(
+            chat_title_for_intelligence("local llama.cpp · Qwen3"),
+            "CHAT · LOCAL BRAIN"
+        );
+        assert_eq!(
+            chat_title_for_intelligence("deterministic mock"),
+            "CHAT · FALLBACK MOCK"
+        );
     }
 
     #[test]
