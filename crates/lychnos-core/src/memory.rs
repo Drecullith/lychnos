@@ -170,6 +170,11 @@ impl MemoryContent {
         self.fields.get(key)
     }
 
+    /// Iterates over structured fields in deterministic key order.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &MemoryValue)> {
+        self.fields.iter()
+    }
+
     /// Returns the number of fields.
     #[must_use]
     pub fn len(&self) -> usize {

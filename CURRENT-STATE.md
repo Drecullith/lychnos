@@ -431,9 +431,18 @@ Implemented:
 - sync revision metadata
 - tombstone metadata
 - generic `MemoryStore`
-- in-memory implementation
+- in-memory core implementation
+- first durable desktop/runtime adapter using a versioned local JSON snapshot
+- fail-closed file and record schema validation
+- deterministic persisted ordering
+- atomic snapshot replacement on the current Omarchy/Linux body
+- rollback of in-memory upserts when persistence fails
+- owner-only file permissions on Unix
+- runtime startup validation and record-count reporting
 
-Permanent storage is not selected yet.
+The JSON snapshot is the first body-specific persistence adapter, not the final database or synchronization format.
+
+Durable memory capture, relevance retrieval, privacy filtering, and provider-context assembly are not wired yet.
 
 ### Configuration
 
@@ -603,7 +612,7 @@ Current expected test counts:
 
 ```text
 Core workspace:       177
-Runtime adapter tests:  13
+Runtime adapter tests:  17
 GTK shell prototype:     5
 ```
 
@@ -673,6 +682,7 @@ Accepted ADRs currently cover:
 0046 Capability-aware intelligence routing across bodies
 0047 First LocalBrain adapter on Omarchy
 0048 Session context and context-triggered live initiative
+0049 First durable local memory adapter
 ```
 
 ## Intentionally Mocked
@@ -701,12 +711,11 @@ Lychnos does **not** currently have:
 - hardware telemetry
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
-- durable Lychnos-owned memory persistence and retrieval into conversation/initiative context
+- durable memory capture, relevance retrieval, privacy filtering, and conversation/initiative context assembly
 - additional LocalBrain adapters for Windows, macOS, Android, iOS, and Pocket bodies; Omarchy/Linux llama.cpp is now the first working adapter
 - portable model-manifest/package mappings for non-llama runtimes
 - real privileged execution
 - real shell-command execution
-- persistent memory storage
 - persistent audit storage
 - portable-device synchronization
 - automatic Game Mode detection
@@ -761,7 +770,7 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. add a durable local Lychnos-owned memory backend and retrieval/context assembly without coupling memory to the active model
+1. wire conservative durable-memory capture, relevance retrieval, privacy filtering, and context assembly without coupling memory to the active model
 2. add the first read-only ambient/context collector so initiative can react to meaningful host context rather than conversation alone
 3. define portable model-manifest/catalog mappings for additional OS/mobile/Pocket adapters
 4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms

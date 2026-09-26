@@ -252,11 +252,13 @@ Wake-word and voice-session capture will reuse the same normalized input, STT, p
 
 Defines Lychnos-owned, model-independent memory records and the `MemoryStore` interface.
 
-The current implementation is an in-memory store.
+The core retains a deterministic in-memory implementation for tests and simulations. The current unprivileged desktop runtime also has a first durable adapter: a versioned JSON snapshot under the user data directory. That adapter validates both file and memory-record schema versions, preserves provenance/sensitivity/confidence/device/sync metadata, writes atomically on the current Omarchy/Linux body, and fails closed on malformed or unsupported data.
+
+The JSON snapshot is a body-specific persistence adapter, not the universal Lychnos database or synchronization protocol. Other operating systems, phones, and Pocket bodies may use different durable stores behind the same `MemoryStore` contract.
 
 Separately, the first LocalBrain adapter keeps a bounded six-turn session conversation window so follow-ups and initiative have natural short-term context. That transient window is cleared on runtime restart and is deliberately **not** treated as durable Lychnos memory.
 
-The authoritative persistent memory model belongs to Lychnos rather than any AI provider.
+Durable memory retrieval and provider-context assembly remain separate policy work. The authoritative persistent memory model belongs to Lychnos rather than any AI provider.
 
 ### config
 

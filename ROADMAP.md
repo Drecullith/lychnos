@@ -101,7 +101,7 @@ This phase should make it possible to exercise Lychnos behavior end to end befor
 
 Near-term Phase 2 priority now favors two foundations that make Lychnos feel persistent and ambient rather than merely conversational:
 
-- durable local Lychnos-owned memory plus retrieval/context assembly;
+- complete durable Lychnos-owned memory capture, relevance retrieval, privacy filtering, and context assembly;
 - the first real read-only ambient/context collector, feeding normalized context into the existing initiative and analysis boundaries.
 
 The context-triggered initiative scheduler is intentionally conservative: meaningful context opens a consideration window, while user idleness only determines whether interruption is appropriate.
@@ -210,7 +210,7 @@ Major design work still required:
 
 These areas span multiple phases and should be introduced when concrete requirements justify them:
 
-- persistent memory backend
+- durable-memory backends across bodies, retrieval policy, and synchronization
 - persistent audit backend
 - tamper-evident audit integrity
 - at-rest encryption

@@ -1,5 +1,6 @@
 mod audio;
 mod local_brain;
+mod memory_store;
 mod stt;
 mod tts;
 
@@ -155,6 +156,20 @@ fn main() {
         }
         Err(error) => {
             eprintln!("Text-to-speech unavailable: {error}");
+            None
+        }
+    };
+    let _memory_store = match memory_store::JsonFileMemoryStore::open_default() {
+        Ok(store) => {
+            println!(
+                "Memory ready · local JSON v1 · {} records · {}",
+                store.len(),
+                store.path().display()
+            );
+            Some(store)
+        }
+        Err(error) => {
+            eprintln!("Persistent memory unavailable: {error}");
             None
         }
     };
