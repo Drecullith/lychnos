@@ -21,7 +21,7 @@ Latest implementation milestones:
 - `11e2c81 Add local Lychnos speech output`
 - `b5db759 Add local push-to-talk speech recognition`
 
-Always run `git status --short --branch` before changing code. At this handoff point all implementation slices through ADR 0051 are committed; this handoff update itself may be the only pending documentation change until its commit.
+Always run `git status --short --branch` before changing code. At this handoff point all implementation slices through ADR 0051 and the handoff refresh are committed and pushed; the working tree should be clean unless a later session has started new work.
 
 ## GitHub Repository Hygiene Audit — COMPLETE
 
