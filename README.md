@@ -15,6 +15,15 @@ Future outfits, armour, materials, glow states, and theme-specific appearances s
 
 ## Project documentation
 
+For a new development chat/session, start with:
+
+- [Start here](START-HERE.md)
+- [Project canon](PROJECT-CANON.md)
+- [Development handoff](DEVELOPMENT-HANDOFF.md)
+- [Continuity protocol](docs/CONTINUITY-PROTOCOL.md)
+
+Then use the broader project documentation:
+
 - [Vision](VISION.md)
 - [Architecture](ARCHITECTURE.md)
 - [Roadmap](ROADMAP.md)
