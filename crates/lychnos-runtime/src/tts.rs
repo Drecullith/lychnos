@@ -183,9 +183,31 @@ impl SpeechOutputWorker {
 
                     match tts.synthesize_to_path(&request, &path) {
                         Ok(_) => {
-                            let status = Command::new("pw-play").arg(&path).status();
-                            if let Err(error) = status {
-                                eprintln!("Speech playback failed: {error}");
+                            match fs::metadata(&path) {
+                                Ok(metadata) => println!(
+                                    "Speech synthesized · {} bytes · {}",
+                                    metadata.len(),
+                                    path.display()
+                                ),
+                                Err(error) => eprintln!(
+                                    "Speech synthesis metadata unavailable · {} · {error}",
+                                    path.display()
+                                ),
+                            }
+
+                            match Command::new("pw-play").arg(&path).status() {
+                                Ok(status) if status.success() => {
+                                    println!("Speech playback complete · {}", path.display());
+                                }
+                                Ok(status) => {
+                                    eprintln!(
+                                        "Speech playback failed · {} · exit={status}",
+                                        path.display()
+                                    );
+                                }
+                                Err(error) => {
+                                    eprintln!("Speech playback failed to start: {error}");
+                                }
                             }
                         }
                         Err(error) => {

@@ -1313,6 +1313,10 @@ fn install_chat_response_updates(chat: &ChatPanel) {
                 continue;
             }
 
+            let hands_free = pending_id.as_str().starts_with("wake-")
+                || pending_id.as_str().starts_with("voice-session-")
+                || pending_id.as_str().starts_with("voice-v2-");
+
             append_chat_history(
                 &chat,
                 &envelope.response.persona_name,
@@ -1322,7 +1326,9 @@ fn install_chat_response_updates(chat: &ChatPanel) {
             *chat.pending_request.borrow_mut() = None;
             chat.entry.set_sensitive(true);
             chat.send_button.set_sensitive(true);
-            chat.entry.grab_focus();
+            if !hands_free && chat.panel.is_visible() {
+                chat.entry.grab_focus();
+            }
             let _ = fs::remove_file(&path);
             break;
         }
@@ -1335,11 +1341,42 @@ fn install_voice_status_updates(chat: &ChatPanel) {
     let chat = chat.clone();
 
     gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
-        let active_id = chat.active_capture.borrow().clone();
+        if let Ok(contents) = fs::read_to_string(voice_status_path())
+            && let Ok(envelope) = VoiceCaptureStatusEnvelope::from_json(&contents)
+        {
+            let is_hands_free = envelope.status.capture_id.as_str().starts_with("wake-")
+                || envelope.status.capture_id.as_str().starts_with("voice-v2-");
+            let active_capture_id = chat.active_capture.borrow().clone();
 
-        if let Some(active_id) = active_id {
-            if let Ok(contents) = fs::read_to_string(voice_status_path())
-                && let Ok(envelope) = VoiceCaptureStatusEnvelope::from_json(&contents)
+            if is_hands_free {
+                match envelope.status.state {
+                    VoiceCaptureState::Started => {
+                        set_chat_activity(&chat, "● Listening…");
+                    }
+                    VoiceCaptureState::Transcribed => {
+                        let transcript = envelope.status.transcript.clone().unwrap_or_default();
+                        if !transcript.trim().is_empty() {
+                            append_chat_history(&chat, "You", &transcript);
+                        }
+                        if let Some(interaction_id) = envelope.status.interaction_id.clone() {
+                            *chat.pending_request.borrow_mut() = Some(interaction_id);
+                            set_chat_activity(&chat, "Thinking…");
+                        }
+                    }
+                    VoiceCaptureState::Failed => {
+                        set_chat_activity(
+                            &chat,
+                            &format!("Hands-free voice failed · {}", envelope.status.detail),
+                        );
+                    }
+                    VoiceCaptureState::TimedOut => {
+                        set_chat_activity(&chat, "");
+                    }
+                    VoiceCaptureState::Stopped | VoiceCaptureState::Transcribing => {}
+                }
+
+                let _ = fs::remove_file(voice_status_path());
+            } else if let Some(active_id) = active_capture_id
                 && envelope.status.capture_id == active_id
             {
                 match envelope.status.state {
@@ -1410,16 +1447,17 @@ fn install_voice_status_updates(chat: &ChatPanel) {
                         chat.stop_requested.set(false);
                     }
                 }
+
                 let _ = fs::remove_file(voice_status_path());
             }
+        }
 
-            if !chat.stop_requested.get()
-                && let Some(started_at) = *chat.capture_started_at.borrow()
-            {
-                let elapsed = started_at.elapsed().as_secs_f64();
-                chat.ptt_label
-                    .set_label(&format!("● Listening… {elapsed:.1}s · release to stop"));
-            }
+        if !chat.stop_requested.get()
+            && let Some(started_at) = *chat.capture_started_at.borrow()
+        {
+            let elapsed = started_at.elapsed().as_secs_f64();
+            chat.ptt_label
+                .set_label(&format!("● Listening… {elapsed:.1}s · release to stop"));
         }
 
         gtk::glib::ControlFlow::Continue

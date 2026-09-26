@@ -194,6 +194,7 @@ Expected portable capabilities:
 - battery-powered operation
 - microphone and speaker
 - small face/display
+- camera/vision input for user-approved ambient visual perception
 - local speech-to-text and text-to-speech
 - offline local model capability
 - network/hotspot connectivity when required
@@ -209,6 +210,7 @@ Major design work still required:
 - memory revision strategy
 - offline/online reconciliation
 - secure loss/recovery behavior
+- multimodal perception policy: camera indicators, privacy boundaries, retention, and bandwidth/power budgets
 
 ## Cross-Cutting Work
 

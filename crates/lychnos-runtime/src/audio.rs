@@ -35,21 +35,7 @@ pub fn start_push_to_talk(
     capture_id: VoiceCaptureId,
     requested_device: Option<&AudioInputDeviceId>,
 ) -> Result<ActiveCapture, String> {
-    let devices = discover_pipewire_inputs()?;
-    let device = match requested_device {
-        Some(requested) => devices
-            .into_iter()
-            .find(|device| &device.id == requested)
-            .ok_or_else(|| format!("requested input not found: {}", requested.as_str()))?,
-        None => devices
-            .iter()
-            .find(|device| device.is_default)
-            .cloned()
-            .or_else(|| devices.into_iter().next())
-            .ok_or_else(|| "no microphone input is available".to_string())?,
-    };
-
-    apply_configured_input_settings(&device)?;
+    let device = prepare_input_device(requested_device)?;
 
     let directory = audio_capture_directory();
     fs::create_dir_all(&directory)
@@ -84,6 +70,31 @@ pub fn start_push_to_talk(
         path,
         started_at: Instant::now(),
     })
+}
+
+pub fn prepare_default_input() -> Result<AudioInputDevice, String> {
+    prepare_input_device(None)
+}
+
+fn prepare_input_device(
+    requested_device: Option<&AudioInputDeviceId>,
+) -> Result<AudioInputDevice, String> {
+    let devices = discover_pipewire_inputs()?;
+    let device = match requested_device {
+        Some(requested) => devices
+            .into_iter()
+            .find(|device| &device.id == requested)
+            .ok_or_else(|| format!("requested input not found: {}", requested.as_str()))?,
+        None => devices
+            .iter()
+            .find(|device| device.is_default)
+            .cloned()
+            .or_else(|| devices.into_iter().next())
+            .ok_or_else(|| "no microphone input is available".to_string())?,
+    };
+
+    apply_configured_input_settings(&device)?;
+    Ok(device)
 }
 
 fn apply_configured_input_settings(device: &AudioInputDevice) -> Result<(), String> {

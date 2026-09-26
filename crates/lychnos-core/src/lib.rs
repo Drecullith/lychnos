@@ -15,6 +15,7 @@ pub mod intelligence;
 pub mod interaction;
 pub mod memory;
 pub mod orchestrator;
+pub mod perception;
 pub mod permission;
 pub mod persona;
 pub mod presentation;

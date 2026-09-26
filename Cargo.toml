@@ -3,6 +3,7 @@ members = [
     "crates/lychnos-core",
     "crates/lychnos-cli",
     "crates/lychnos-runtime",
+    "crates/lychnos-perception-omarchy",
 ]
 resolver = "3"
 

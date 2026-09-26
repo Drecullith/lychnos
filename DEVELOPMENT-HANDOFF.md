@@ -10,7 +10,8 @@ Branch: `feat/phase2-approval-flow`
 
 Latest implementation milestones:
 
-- ADR 0052 Conversation output modes, chat history, and live companion activity (current physically verified UX slice; commit follows this handoff update)
+- ADR 0053 Voice V2 live perception/session architecture — physically verified ambient conversation milestone
+- ADR 0052 Conversation output modes, chat history, and live companion activity
 - `4d528cf Add first read-only ambient collector`
 - `0aa5c4b Add explicit durable memory recall`
 - `486a945 Add first durable local memory adapter`
@@ -22,7 +23,7 @@ Latest implementation milestones:
 - `11e2c81 Add local Lychnos speech output`
 - `b5db759 Add local push-to-talk speech recognition`
 
-Always run `git status --short --branch` before changing code. ADR 0052 is the current physically verified interaction-UX slice. Commit/push it before starting wake-word work if this handoff is read before the commit lands.
+Always run `git status --short --branch` before changing code. ADR 0053 is the physically verified Voice V2 milestone; preserve the working wake/session architecture and treat later TTS/language/platform work as replaceable adapters around it.
 
 ## GitHub Repository Hygiene Audit — COMPLETE
 
@@ -36,7 +37,7 @@ Verified:
 - no exact duplicate Markdown documents;
 - continuity files have distinct roles rather than duplicated bodies;
 - ADR numbers, titles, and normalized bodies have no duplicates;
-- ADR numbering is contiguous through 0052;
+- ADR numbering is contiguous through 0053;
 - GitHub issues contain no competing project-state convention;
 - historical Phase 1 PR is not a second source of current truth;
 - continuity docs and recent ADRs were verified through the GitHub connector.
@@ -112,30 +113,94 @@ Voice:
 
 - local Whisper multilingual-base STT;
 - Piper `en_GB-alan-medium` TTS;
-- X1 Pro input port `analog-input-mic`, input level 30%.
+- dedicated Voice V2 perception process (`lychnos-perception-omarchy`);
+- sherpa-onnx open-vocabulary KWS for `Lychnos`;
+- WebRTC VAD for speech onset/end-of-turn;
+- sherpa speaker embeddings for ephemeral per-session speaker verification;
+- X1 Pro input port `analog-input-mic`; current calibration/testing raised source volume from 30% to 80%.
 
 ## LIVE-VERIFIED — Voice / Conversation
 
-Working path:
+### Voice V2 architecture
+
+Current preferred ambient path:
+
+`PipeWire microphone -> sherpa-onnx keyword spotting -> WebRTC VAD -> Whisper STT -> ConversationContext -> Qwen LocalBrain -> Piper TTS -> bounded follow-up session`
+
+Core ownership:
+
+- `crates/lychnos-core/src/perception.rs` owns the deterministic live-session state machine;
+- states: `WakeArmed -> Listening -> Thinking -> Speaking -> FollowUp -> Listening/WakeArmed`;
+- invalid transitions are rejected rather than guessed by scattered booleans/timers;
+- Audio and Vision are first-class perception modalities for future Pocket/camera work.
+
+Body adapter:
+
+- `crates/lychnos-perception-omarchy` is a separate process;
+- it owns microphone/KWS/VAD/speaker-verification mechanics only;
+- runtime owns AI/persona/session authority;
+- perception failure must not take down the main runtime;
+- Voice V1 wake listener is disabled whenever Voice V2 starts successfully, so there is one ambient microphone owner.
+
+Wake detection:
+
+- sherpa-onnx Zipformer KWS;
+- current wake phrase: `Lychnos`;
+- phonetic variants cover observed forms such as Lich/Leek/Lick Noss/Nuss;
+- live natural-pronunciation detection verified;
+- natural inline wake is physically verified: `So, Lychnos, what are we doing today?` woke the agent and preserved the rest of the sentence as the user request;
+- wake -> Listening -> utterance finalized cleanly after 2.7s in calibration;
+- Whisper is not used to decide whether the wake phrase occurred.
+
+Turn endpointing:
+
+- WebRTC VAD handles speech boundaries;
+- this eliminated the repeated 30-second runaway captures from Voice V1;
+- Whisper now performs transcription only.
+
+Natural hands-free session:
+
+- wake phrase opens the session;
+- Lychnos gives acknowledgement + spoken reply;
+- after speech playback completes, a bounded follow-up window opens;
+- user can continue without repeating the wake phrase;
+- session returns to wake-required mode after expiry or an explicit close phrase;
+- close phrases include `stand down`, `stop listening`, `go idle`, `that's enough for now`, `we can stop for now`, goodbye/later phrases, and prior return-to-work/fixing phrases;
+- `Thank you brother` alone intentionally does not close the session.
+
+Chat/UI mirroring:
+
+- Voice V2 transcripts appear as `You` in `CHAT · LOCAL BRAIN`;
+- matching Lychnos replies appear in the same bounded chat history;
+- shell recognizes `voice-v2-*` request/capture IDs as hands-free turns.
+
+Speaker isolation / anti-video behavior:
+
+- follow-up speech requires a short continuous VAD onset;
+- the wake turn creates an **ephemeral in-RAM speaker embedding** for the person who opened the session;
+- no permanent voiceprint is written to Lychnos memory;
+- no-wake follow-ups are compared against that session speaker;
+- initial cosine threshold: `0.35` (configurable);
+- calibration: same-user split about `0.494`; user-vs-Piper about `0.1375`;
+- rejected non-session speakers return to FollowUp without reaching Whisper/Qwen;
+- fingerprint clears when the session expires/returns to WakeArmed/Disabled;
+- normal wake -> answer -> follow-up -> stop behavior is physically verified;
+- deliberate video-speaker rejection test is **physically verified**: user follow-ups were accepted around cosine similarity `0.375–0.461`, while video/background voices were rejected around `0.10–0.29` before reaching Whisper/Qwen.
+
+Provider/runtime:
+
+- expected label is `local llama.cpp · Qwen/Qwen3-8B-GGUF:Q4_K_M`, not `local-mock`;
+- initiative is now hard-blocked unless companion activity is `Idle`; this fixes an intermittent bug where a long spoken reply could be overwritten from `Speaking` to `Idle` before Voice V2 re-armed follow-up;
+- Voice V2 now exits when the runtime control pipe closes, so perception cannot remain as an orphan competing for the microphone after a runtime restart;
+- runtime now handles SIGTERM/Ctrl-C gracefully and drops both managed Qwen and perception children; lifecycle proof verified zero runtime/llama/perception processes remain after SIGTERM;
+- a stale unknown llama server on port 18181 still causes deliberate fallback to mock, but normal graceful Lychnos shutdown no longer leaves that stale process behind;
+- current runtime launches/manages its perception child.
+
+### Older PTT path remains available
 
 `Push-to-Talk -> PipeWire -> Whisper -> ConversationContext -> LocalBrain -> shell text -> Piper speech`
 
-Verified:
-
-- PTT lifecycle works;
-- local transcription works;
-- pure non-speech labels such as `(upbeat music)` are filtered;
-- LocalBrain produces real non-mock replies;
-- spoken replies play locally;
-- typed and PTT use the same provider-neutral conversation path;
-- chat title now correctly reports `CHAT · LOCAL BRAIN` for the real local provider;
-- multiple user/Lychnos turns remain in bounded scrollable chat history;
-- microphone/transcription/thinking/speaking progress no longer overwrites prior turns;
-- persisted `Voice · ON/OFF` lets typed messages request text-only or text + spoken replies;
-- runtime projects live Idle/Listening/Thinking/Speaking activity;
-- the Lychnos face physically verified to follow Listening -> Thinking -> Speaking -> idle/normal.
-
-Wake word / hands-free voice session is the next interaction slice.
+PTT lifecycle, local transcription, non-speech filtering, typed/voice normalized conversation path, activity projection, and Voice ON/OFF preference remain intact.
 
 ## COMMITTED — Intelligence / Initiative
 
@@ -244,17 +309,22 @@ Live healthy-body test:
 
 ## Quality Gate
 
-Latest strict gate:
+Latest full Voice V2 milestone gate:
 
-- core: 179 tests passed;
-- runtime: 32 tests passed;
-- shell: 7 tests passed;
-- strict Clippy clean.
+- workspace core: **188 tests passed**;
+- runtime: **47 tests passed**;
+- perception/CLI build and test targets passed;
+- shell: **7 tests passed**;
+- workspace strict Clippy: clean;
+- shell strict Clippy: clean;
+- workspace release build: clean;
+- shell release build: clean;
+- `git diff --check`: clean.
 
-ADR hygiene after 0052:
+ADR hygiene after 0053:
 
-- 52 ADRs;
-- contiguous 0001 through 0052;
+- 53 ADRs;
+- contiguous 0001 through 0053;
 - no duplicate ADR number/title/body.
 
 ## Important Remaining Gaps
@@ -280,7 +350,9 @@ Ambient:
 
 Interaction/intelligence:
 
-- wake-word activation;
+- monitor/tune Voice V2 follow-up speaker isolation only if new real-world false accepts/rejects appear;
+- expose user-facing wake-name / agent / voice / provider settings;
+- add Voice mode settings (Wake / PTT / Both / Off);
 - account-backed provider bridges;
 - provider/fallback status UI;
 - intelligence/voice/persona settings;
@@ -297,13 +369,17 @@ Safety/performance:
 
 Recommended next sequence:
 
-1. implement free/local wake-word activation for `Lychnos` and reuse the existing normalized voice path;
-2. add a bounded hands-free voice-session window so wake activation can support natural back-and-forth without requiring the status card or PTT;
-3. add explicit voice-mode settings: Wake only / PTT only / Both / Voice off;
-4. then return to memory inspection + forget/tombstone controls and broader low-risk ambient context;
-5. keep AccountBridge and all host-changing actions on the existing provider-neutral and safety boundaries.
+1. Preserve the currently working sherpa KWS wake path; do not redesign wake detection again unless evidence requires it.
+2. Keep the current follow-up speaker threshold unless new real-world evidence shows false accepts/rejects; the anti-video test is now physically verified.
+3. Run full tests + strict Clippy, then commit/push the complete Voice V2 slice as one coherent milestone.
+4. Add user-facing settings for agent/provider, persona/display name, voice, and wake call. The configured agent name should be able to drive the wake phrase where supported.
+5. Add explicit Voice mode settings: Wake only / PTT only / Both / Voice off.
+6. Then return to memory inspection + forget/tombstone controls and broader low-risk ambient context.
+7. Keep AccountBridge and host-changing actions on existing provider-neutral permission/audit boundaries.
 
-A good next ambient candidate is broader user-service/system health metadata or selected hardware telemetry. Terminal content should wait for explicit scoping/privacy rules.
+### Future portable perception
+
+The roadmap/canon now explicitly treat camera/vision as a first-class future perception modality for Pocket Lychnos. The intended portable body can eventually hear and see ambient context while remaining local-first, visible/permission-bounded, and without automatically hoarding raw video.
 
 ## Resume Verification
 
@@ -314,7 +390,8 @@ cd /home/drec/Work/lychnos
 git status --short --branch
 git log -15 --oneline
 ~/.local/bin/lychnos status
-tail -n 60 ~/.local/state/lychnos/runtime.log
+tail -n 100 ~/.local/state/lychnos/runtime.log
+tail -n 100 ~/.local/state/lychnos/perception-v2.log
 ```
 
 Then read:
@@ -323,7 +400,7 @@ Then read:
 - `PROJECT-CANON.md`
 - `DEVELOPMENT-HANDOFF.md`
 - `CURRENT-STATE.md`
-- ADRs 0048–0052.
+- ADRs 0048–0053.
 
 ## Documentation Rule
 

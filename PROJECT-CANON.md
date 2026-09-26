@@ -169,6 +169,21 @@ Desktop presence, phone presence, and future physical Pocket body are expression
 
 Presentation surfaces must not contain system-action authority.
 
+## Live Perception
+
+Audio is the first ambient perception channel. Vision is a planned first-class
+perception channel for future bodies, especially Pocket/Portable Lychnos.
+
+Wake detection, voice-activity detection, microphones, cameras, and other
+sensors are body-specific adapters. They report normalized perception/session
+events into Lychnos-owned core state; they do not gain execution authority.
+
+The future portable body may include a camera so Lychnos can receive visual
+context and experience the user's surroundings when that capability is enabled.
+Camera use must be visible, configurable, permission-bounded, and local-first
+where practical. Visual input must not silently become indefinite raw-media
+storage.
+
 ## Security and Auditability
 
 Diagnostic logs and the security audit are separate concepts.

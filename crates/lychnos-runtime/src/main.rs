@@ -2,13 +2,19 @@ mod audio;
 mod local_brain;
 mod memory_context;
 mod memory_store;
+mod perception_v2;
 mod stt;
 mod system_health;
 mod tts;
+mod wake_word;
 
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -24,6 +30,7 @@ use lychnos_core::{
         InteractionId, InteractionSource,
     },
     orchestrator::FoundationRuntime,
+    perception::{PerceptionControl, PerceptionEvent, PerceptionUtteranceSource},
     persona::PersonaProfile,
     presentation::{
         CompanionActivity, CompanionControlEnvelope, CompanionPresentationEnvelope,
@@ -171,6 +178,14 @@ fn main() {
         lychnos_core::version()
     );
 
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let signal_shutdown = Arc::clone(&shutdown_requested);
+    if let Err(error) = ctrlc::set_handler(move || {
+        signal_shutdown.store(true, Ordering::Release);
+    }) {
+        eprintln!("Graceful shutdown handler unavailable: {error}");
+    }
+
     let mut runtime = FoundationRuntime::new(
         Default::default(),
         SequenceIdProvider::default(),
@@ -217,10 +232,66 @@ fn main() {
     let mut active_capture: Option<audio::ActiveCapture> = None;
     let mut initiative_scheduler = InitiativeScheduler::new();
     let mut system_health_collector = system_health::UserServiceHealthCollector::new();
+    let mut hands_free_session = false;
+    let mut voice_v2_session = false;
+    let mut voice_v2_follow_up_after_reply = true;
+    let mut perception_suspended = false;
 
     report_audio_inputs();
     ensure_runtime_directories();
     clear_stale_voice_session_state();
+
+    let mut perception_v2 = match audio::prepare_default_input() {
+        Ok(device) => match perception_v2::PerceptionWorker::start(&device) {
+            Ok(worker) => {
+                println!(
+                    "Voice V2 ready · dedicated KWS + WebRTC VAD · phrase=Lychnos · {}",
+                    device.display_name
+                );
+                Some(worker)
+            }
+            Err(error) => {
+                eprintln!("Voice V2 unavailable: {error}");
+                None
+            }
+        },
+        Err(error) => {
+            eprintln!("Voice V2 unavailable: {error}");
+            None
+        }
+    };
+
+    let mut wake_word = if perception_v2.is_some() {
+        println!("Voice V1 wake listener disabled · Voice V2 owns ambient microphone");
+        None
+    } else {
+        match stt.as_ref() {
+            Some(stt) => match audio::prepare_default_input() {
+                Ok(device) => match wake_word::WakeWordWorker::start(stt.clone(), device.clone()) {
+                    Ok(worker) => {
+                        println!(
+                            "Wake word ready · local Whisper-gated listener · phrase=Lychnos · {}",
+                            device.display_name
+                        );
+                        Some(worker)
+                    }
+                    Err(error) => {
+                        eprintln!("Wake word unavailable: {error}");
+                        None
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Wake word unavailable: {error}");
+                    None
+                }
+            },
+            None => {
+                eprintln!("Wake word unavailable: local STT is not ready");
+                None
+            }
+        }
+    };
+
     publish_snapshot(&runtime, activity, &provider_label);
 
     println!(
@@ -228,13 +299,42 @@ fn main() {
         persona.display_name, provider_label
     );
 
-    loop {
+    while !shutdown_requested.load(Ordering::Acquire) {
         let runtime_changed = process_control_requests(&mut runtime);
         let ambient_changed = process_system_health(
             &mut runtime,
             &mut system_health_collector,
             &mut initiative_scheduler,
         );
+
+        let wake_suspended = runtime.presentation_state().runtime_mode
+            != lychnos_core::runtime::RuntimeMode::Normal
+            || active_capture.is_some()
+            || matches!(
+                activity,
+                CompanionActivity::Thinking | CompanionActivity::Speaking
+            );
+
+        if let Some(worker) = wake_word.as_ref() {
+            worker.set_suspended(wake_suspended);
+        }
+
+        let should_suspend_perception = runtime.presentation_state().runtime_mode
+            != lychnos_core::runtime::RuntimeMode::Normal
+            || active_capture.is_some();
+        if should_suspend_perception != perception_suspended {
+            if let Some(worker) = perception_v2.as_mut() {
+                let control = if should_suspend_perception {
+                    PerceptionControl::Disable
+                } else {
+                    PerceptionControl::Enable
+                };
+                if let Err(error) = worker.send(control) {
+                    eprintln!("Voice V2 control failed: {error}");
+                }
+            }
+            perception_suspended = should_suspend_perception;
+        }
 
         {
             let mut conversation = ConversationRuntimeContext {
@@ -247,6 +347,20 @@ fn main() {
                 memory_store: &mut memory_store,
             };
 
+            process_perception_v2_events(
+                &mut conversation,
+                &mut perception_v2,
+                stt.as_ref(),
+                &mut voice_v2_session,
+                &mut voice_v2_follow_up_after_reply,
+                &mut initiative_scheduler,
+            );
+            process_wake_word_events(
+                &mut conversation,
+                &mut wake_word,
+                &mut hands_free_session,
+                &mut initiative_scheduler,
+            );
             process_voice_control_requests(
                 &mut conversation,
                 &mut active_capture,
@@ -277,7 +391,39 @@ fn main() {
                 .as_ref()
                 .is_none_or(|worker| !worker.is_speaking())
         {
-            activity = CompanionActivity::Idle;
+            if voice_v2_session {
+                if let Some(worker) = perception_v2.as_mut() {
+                    let follow_up = voice_v2_follow_up_after_reply;
+                    match worker.send(PerceptionControl::ResponseFinished { follow_up }) {
+                        Ok(()) if follow_up => {
+                            activity = CompanionActivity::Listening;
+                        }
+                        Ok(()) => {
+                            voice_v2_session = false;
+                            activity = CompanionActivity::Idle;
+                        }
+                        Err(error) => {
+                            eprintln!("Voice V2 reply-complete control failed: {error}");
+                            voice_v2_session = false;
+                            activity = CompanionActivity::Idle;
+                        }
+                    }
+                } else {
+                    voice_v2_session = false;
+                    activity = CompanionActivity::Idle;
+                }
+            } else if hands_free_session {
+                if let Some(worker) = wake_word.as_ref() {
+                    worker.open_follow_up_window();
+                    println!("Hands-free follow-up window opened");
+                    activity = CompanionActivity::Listening;
+                } else {
+                    hands_free_session = false;
+                    activity = CompanionActivity::Idle;
+                }
+            } else {
+                activity = CompanionActivity::Idle;
+            }
             publish_snapshot(&runtime, activity, &provider_label);
         } else if runtime_changed || ambient_changed {
             publish_snapshot(&runtime, activity, &provider_label);
@@ -285,6 +431,8 @@ fn main() {
 
         thread::sleep(Duration::from_millis(100));
     }
+
+    println!("Lychnos runtime shutting down cleanly");
 }
 
 fn process_system_health(
@@ -474,6 +622,406 @@ fn enforce_voice_capture_timeout(
     }
 
     set_activity(runtime, activity, CompanionActivity::Idle, provider_label);
+}
+
+fn process_perception_v2_events(
+    context: &mut ConversationRuntimeContext<'_>,
+    perception: &mut Option<perception_v2::PerceptionWorker>,
+    stt: Option<&stt::WhisperCppStt>,
+    voice_v2_session: &mut bool,
+    follow_up_after_reply: &mut bool,
+    initiative_scheduler: &mut InitiativeScheduler,
+) {
+    loop {
+        let event = perception
+            .as_ref()
+            .and_then(perception_v2::PerceptionWorker::try_recv);
+        let Some(event) = event else {
+            break;
+        };
+
+        match event {
+            PerceptionEvent::Ready {
+                wake_phrase,
+                device,
+            } => {
+                println!("Voice V2 perception armed · phrase={wake_phrase} · {device}");
+            }
+            PerceptionEvent::State { state } => {
+                println!("Voice V2 state · {state:?}");
+            }
+            PerceptionEvent::WakeDetected { keyword } => {
+                *voice_v2_session = true;
+                *follow_up_after_reply = true;
+                initiative_scheduler.note_user_activity();
+                context.set_activity(CompanionActivity::Listening);
+                println!("Voice V2 wake detected · {keyword}");
+
+                if let Err(error) = wake_word::play_acknowledgement() {
+                    eprintln!("Voice V2 acknowledgement unavailable: {error}");
+                }
+            }
+            PerceptionEvent::UtteranceFinalized {
+                path,
+                duration_ms,
+                source,
+            } => {
+                *voice_v2_session = true;
+                initiative_scheduler.note_user_activity();
+                context.set_activity(CompanionActivity::Thinking);
+
+                let capture_id = lychnos_core::voice::VoiceCaptureId::new(format!(
+                    "voice-v2-{}",
+                    unique_nanos()
+                ));
+                let audio_path = PathBuf::from(&path);
+
+                let transcript = match stt {
+                    Some(stt) => match stt.transcribe(&audio_path) {
+                        Ok(transcript) => transcript.text,
+                        Err(error) => {
+                            eprintln!("Voice V2 transcription failed: {error}");
+                            let _ = fs::remove_file(&audio_path);
+                            reset_perception_after_failed_turn(
+                                perception,
+                                voice_v2_session,
+                                context,
+                            );
+                            continue;
+                        }
+                    },
+                    None => {
+                        eprintln!("Voice V2 transcription unavailable: local STT is not ready");
+                        let _ = fs::remove_file(&audio_path);
+                        reset_perception_after_failed_turn(perception, voice_v2_session, context);
+                        continue;
+                    }
+                };
+                let _ = fs::remove_file(&audio_path);
+
+                let command = match source {
+                    PerceptionUtteranceSource::Wake => strip_voice_v2_wake_prefix(&transcript),
+                    PerceptionUtteranceSource::FollowUp => transcript.trim().to_string(),
+                };
+
+                println!(
+                    "Voice V2 transcription · {} · {}ms · {:?} · command={} · raw={}",
+                    capture_id.as_str(),
+                    duration_ms,
+                    source,
+                    command,
+                    transcript
+                );
+
+                if command.trim().is_empty() {
+                    if let Some(worker) = perception.as_mut() {
+                        let _ = worker.send(PerceptionControl::ResponseStarted);
+                        if let Err(error) =
+                            worker.send(PerceptionControl::ResponseFinished { follow_up: true })
+                        {
+                            eprintln!("Voice V2 wake-only follow-up failed: {error}");
+                            *voice_v2_session = false;
+                            context.set_activity(CompanionActivity::Idle);
+                            continue;
+                        }
+                    }
+                    *follow_up_after_reply = true;
+                    context.set_activity(CompanionActivity::Listening);
+                    continue;
+                }
+
+                let close_after_reply = wake_word::should_close_session(&command);
+                *follow_up_after_reply = !close_after_reply;
+
+                let interaction_source = match source {
+                    PerceptionUtteranceSource::Wake => InteractionSource::WakeWord,
+                    PerceptionUtteranceSource::FollowUp => InteractionSource::VoiceSession,
+                };
+                let interaction_id =
+                    InteractionId::new(format!("voice-v2-{}", capture_id.as_str()));
+                let request = ConversationRequest::new(
+                    interaction_id.clone(),
+                    interaction_source,
+                    command.clone(),
+                );
+
+                let _ = publish_voice_status(VoiceCaptureStatus {
+                    capture_id: capture_id.clone(),
+                    state: VoiceCaptureState::Transcribed,
+                    captured_bytes: None,
+                    duration_ms: Some(duration_ms),
+                    transcript: Some(command.clone()),
+                    interaction_id: Some(interaction_id.clone()),
+                    detail: "Voice V2 speech recognized locally.".into(),
+                });
+
+                match handle_conversation_request(context, &request) {
+                    Ok(()) => {
+                        initiative_scheduler
+                            .note_context_change(InitiativeTrigger::ConversationFollowUp);
+
+                        if let Some(worker) = perception.as_mut() {
+                            if let Err(error) = worker.send(PerceptionControl::ResponseStarted) {
+                                eprintln!("Voice V2 response-start control failed: {error}");
+                                *voice_v2_session = false;
+                                context.set_activity(CompanionActivity::Idle);
+                                continue;
+                            }
+
+                            if *context.activity != CompanionActivity::Speaking {
+                                match worker.send(PerceptionControl::ResponseFinished {
+                                    follow_up: !close_after_reply,
+                                }) {
+                                    Ok(()) if !close_after_reply => {
+                                        context.set_activity(CompanionActivity::Listening);
+                                    }
+                                    Ok(()) => {
+                                        *voice_v2_session = false;
+                                        context.set_activity(CompanionActivity::Idle);
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Voice V2 immediate reply-complete control failed: {error}"
+                                        );
+                                        *voice_v2_session = false;
+                                        context.set_activity(CompanionActivity::Idle);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Voice V2 interaction {} failed: {error}",
+                            interaction_id.as_str()
+                        );
+                        reset_perception_after_failed_turn(perception, voice_v2_session, context);
+                    }
+                }
+            }
+            PerceptionEvent::FollowUpSpeakerRejected { score_milli } => {
+                println!(
+                    "Voice V2 ignored non-session speaker · similarity={:.3}",
+                    f32::from(score_milli) / 1000.0
+                );
+            }
+            PerceptionEvent::FollowUpExpired => {
+                if *voice_v2_session {
+                    println!("Voice V2 follow-up window expired");
+                }
+                *voice_v2_session = false;
+                if *context.activity == CompanionActivity::Listening {
+                    context.set_activity(CompanionActivity::Idle);
+                }
+            }
+        }
+    }
+
+    let stopped = perception
+        .as_mut()
+        .is_some_and(|worker| !worker.is_running());
+    if stopped {
+        eprintln!("Voice V2 perception process stopped");
+        *perception = None;
+        *voice_v2_session = false;
+        if *context.activity == CompanionActivity::Listening {
+            context.set_activity(CompanionActivity::Idle);
+        }
+    }
+}
+
+fn reset_perception_after_failed_turn(
+    perception: &mut Option<perception_v2::PerceptionWorker>,
+    voice_v2_session: &mut bool,
+    context: &mut ConversationRuntimeContext<'_>,
+) {
+    if let Some(worker) = perception.as_mut() {
+        let _ = worker.send(PerceptionControl::ResponseStarted);
+        let _ = worker.send(PerceptionControl::ResponseFinished { follow_up: false });
+    }
+    *voice_v2_session = false;
+    context.set_activity(CompanionActivity::Idle);
+}
+
+fn strip_voice_v2_wake_prefix(transcript: &str) -> String {
+    let trimmed = transcript.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let aliases = [
+        "lychnos",
+        "lichnos",
+        "lichlaus",
+        "lich nos",
+        "lich noss",
+        "leek nos",
+        "leek noss",
+        "lick nos",
+        "lick noss",
+        "lick nuss",
+        "lee h nos",
+        "lee h noss",
+    ];
+
+    for alias in aliases {
+        if lower.starts_with(alias) {
+            let remainder = &trimmed[alias.len()..];
+            return remainder
+                .trim_start_matches(|character: char| {
+                    character.is_whitespace()
+                        || matches!(character, ',' | '.' | ':' | ';' | '!' | '?' | '-')
+                })
+                .trim()
+                .to_string();
+        }
+    }
+
+    if let Some(comma) = trimmed.find(',')
+        && comma <= 14
+    {
+        return trimmed[comma + 1..].trim().to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn process_wake_word_events(
+    context: &mut ConversationRuntimeContext<'_>,
+    wake_word: &mut Option<wake_word::WakeWordWorker>,
+    hands_free_session: &mut bool,
+    initiative_scheduler: &mut InitiativeScheduler,
+) {
+    let mut disable_worker = false;
+
+    loop {
+        let event = wake_word
+            .as_ref()
+            .and_then(wake_word::WakeWordWorker::try_recv);
+        let Some(event) = event else {
+            break;
+        };
+
+        match event {
+            wake_word::WakeWordEvent::Activated {
+                capture_id,
+                transcript,
+            } => {
+                *hands_free_session = true;
+                initiative_scheduler.note_user_activity();
+                println!("Wake word detected · {transcript}");
+                context.set_activity(CompanionActivity::Listening);
+
+                if let Some(worker) = wake_word.as_ref() {
+                    worker.set_suspended(true);
+                }
+                if let Err(error) = wake_word::play_acknowledgement() {
+                    eprintln!("Wake acknowledgement unavailable: {error}");
+                }
+                if let Some(worker) = wake_word.as_ref() {
+                    worker.set_suspended(false);
+                }
+
+                let _ = publish_voice_status(VoiceCaptureStatus {
+                    capture_id,
+                    state: VoiceCaptureState::Started,
+                    captured_bytes: None,
+                    duration_ms: None,
+                    transcript: None,
+                    interaction_id: None,
+                    detail: "Wake word detected. Listening for hands-free speech.".into(),
+                });
+            }
+            wake_word::WakeWordEvent::Command {
+                capture_id,
+                source,
+                transcript,
+                command,
+            } => {
+                let close_after_reply = wake_word::should_close_session(&command);
+                *hands_free_session = !close_after_reply;
+                initiative_scheduler.note_user_activity();
+
+                if close_after_reply {
+                    if let Some(worker) = wake_word.as_ref() {
+                        worker.clear_follow_up_window();
+                    }
+                    println!("Hands-free closing phrase detected");
+                }
+
+                let prefix = match source {
+                    InteractionSource::WakeWord => "wake",
+                    InteractionSource::VoiceSession => "voice-session",
+                    _ => "voice",
+                };
+                let interaction_id =
+                    InteractionId::new(format!("{prefix}-{}", capture_id.as_str()));
+                let request =
+                    ConversationRequest::new(interaction_id.clone(), source, command.clone());
+
+                let _ = publish_voice_status(VoiceCaptureStatus {
+                    capture_id: capture_id.clone(),
+                    state: VoiceCaptureState::Transcribed,
+                    captured_bytes: None,
+                    duration_ms: None,
+                    transcript: Some(command.clone()),
+                    interaction_id: Some(interaction_id.clone()),
+                    detail: "Hands-free speech recognized locally.".into(),
+                });
+
+                println!(
+                    "Hands-free transcription · {} · {} · raw={}",
+                    capture_id.as_str(),
+                    command,
+                    transcript
+                );
+
+                match handle_conversation_request(context, &request) {
+                    Ok(()) => {
+                        initiative_scheduler
+                            .note_context_change(InitiativeTrigger::ConversationFollowUp);
+
+                        if *context.activity == CompanionActivity::Idle {
+                            if let Some(worker) = wake_word.as_ref() {
+                                worker.open_follow_up_window();
+                                println!("Hands-free follow-up window opened");
+                                context.set_activity(CompanionActivity::Listening);
+                            } else {
+                                *hands_free_session = false;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Hands-free interaction {} failed: {error}",
+                            interaction_id.as_str()
+                        );
+                        *hands_free_session = false;
+                        if let Some(worker) = wake_word.as_ref() {
+                            worker.clear_follow_up_window();
+                        }
+                        context.set_activity(CompanionActivity::Idle);
+                    }
+                }
+            }
+            wake_word::WakeWordEvent::SessionExpired => {
+                if *hands_free_session {
+                    println!("Hands-free voice session expired");
+                }
+                *hands_free_session = false;
+                if *context.activity == CompanionActivity::Listening {
+                    context.set_activity(CompanionActivity::Idle);
+                }
+            }
+            wake_word::WakeWordEvent::Error(error) => {
+                eprintln!("Wake-word listener stopped: {error}");
+                *hands_free_session = false;
+                context.set_activity(CompanionActivity::Idle);
+                disable_worker = true;
+            }
+        }
+    }
+
+    if disable_worker {
+        *wake_word = None;
+    }
 }
 
 fn process_voice_control_requests(
@@ -725,6 +1273,14 @@ fn handle_conversation_request(
         }
     };
 
+    println!(
+        "Conversation response ready · {} · source={:?} · output={:?} · {} chars",
+        request.id.as_str(),
+        request.source,
+        request.output_mode,
+        response.text.chars().count()
+    );
+
     if let Err(error) = publish_interaction_response(&response) {
         context.set_activity(CompanionActivity::Idle);
         return Err(error);
@@ -733,7 +1289,10 @@ fn handle_conversation_request(
     if request.output_mode == ConversationOutputMode::TextAndSpeech {
         if let Some(speech_output) = context.speech_output {
             match speech_output.speak(response.text.clone()) {
-                Ok(()) => context.set_activity(CompanionActivity::Speaking),
+                Ok(()) => {
+                    println!("Speech reply queued · {}", request.id.as_str());
+                    context.set_activity(CompanionActivity::Speaking);
+                }
                 Err(error) => {
                     eprintln!("Failed to queue spoken Lychnos reply: {error}");
                     context.set_activity(CompanionActivity::Idle);
@@ -815,6 +1374,13 @@ fn process_initiative(
     speech_output: Option<&tts::SpeechOutputWorker>,
     scheduler: &mut InitiativeScheduler,
 ) {
+    // Initiative must never steal lifecycle ownership from an active
+    // conversation. In particular, changing Speaking -> Idle here can cause
+    // Voice V2 to miss speech-completion and never re-arm the follow-up window.
+    if *activity != CompanionActivity::Idle {
+        return;
+    }
+
     let Some(context) = scheduler.context_if_due(runtime, provider.has_session_context()) else {
         return;
     };
@@ -1065,6 +1631,22 @@ mod scheduler_tests {
             Instant::now() - INITIATIVE_IDLE_BEFORE_CHECK - Duration::from_secs(1);
         scheduler.note_context_change(trigger);
         scheduler
+    }
+
+    #[test]
+    fn voice_v2_strips_common_wake_transcription_variants() {
+        assert_eq!(
+            strip_voice_v2_wake_prefix("Lichlaus, can you hear me?"),
+            "can you hear me?"
+        );
+        assert_eq!(
+            strip_voice_v2_wake_prefix("Lich Nos can you hear me"),
+            "can you hear me"
+        );
+        assert_eq!(
+            strip_voice_v2_wake_prefix("Lychnos. What time is it?"),
+            "What time is it?"
+        );
     }
 
     #[test]

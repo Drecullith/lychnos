@@ -232,6 +232,28 @@ It follows the versioned read-only presentation snapshot produced by the separat
 
 This prototype is not a final UI-toolkit decision.
 
+### perception
+
+Defines Lychnos-owned live-session state independently of any microphone, camera,
+wake engine, VAD, or intelligence provider. `LiveSessionController` is the
+single deterministic owner of the ambient conversation lifecycle:
+
+`WakeArmed → Listening → Thinking → Speaking → FollowUp → Listening/WakeArmed`.
+
+Invalid transitions are rejected rather than repaired by scattered booleans or
+timers. Audio and Vision are both first-class perception modalities so the
+desktop voice path and future camera-equipped Pocket body can share the same
+core vocabulary.
+
+The current Voice V2 prototype adds a separate
+`lychnos-perception-omarchy` process. It is deliberately outside the core and
+outside the main runtime so native/audio failures cannot take the companion
+runtime down with them, and so Game Mode can unload ambient perception
+completely. Its first adapter uses a local sherpa-onnx open-vocabulary keyword
+spotter for the configurable wake phrase and WebRTC VAD for speech boundaries.
+Whisper remains STT; it is no longer responsible for deciding whether Lychnos
+was addressed.
+
 ### voice
 
 Defines platform-neutral audio-input identities, explicit capture-control messages, runtime-confirmed capture status, and voice-activation modes without depending on PipeWire, ALSA, or another host audio API.

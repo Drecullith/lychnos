@@ -1,15 +1,15 @@
 [package]
-name = "lychnos-runtime"
+name = "lychnos-perception-omarchy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 lychnos-core = { path = "../lychnos-core" }
 serde.workspace = true
 serde_json.workspace = true
-ureq.workspace = true
-getrandom.workspace = true
-ctrlc = { version = "3.5", features = ["termination"] }
+sherpa-onnx = "1.13.8"
+webrtc-vad = "0.4.0"
