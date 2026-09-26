@@ -362,9 +362,25 @@ impl PersistedMemorySensitivity {
 }
 
 fn default_memory_path() -> PathBuf {
-    env::var_os("XDG_DATA_HOME")
+    resolve_memory_path(
+        env::var_os("LYCHNOS_MEMORY_PATH"),
+        env::var_os("XDG_DATA_HOME"),
+        env::var_os("HOME"),
+    )
+}
+
+fn resolve_memory_path(
+    explicit_path: Option<std::ffi::OsString>,
+    data_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(path) = explicit_path {
+        return PathBuf::from(path);
+    }
+
+    data_home
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")))
         .unwrap_or_else(env::temp_dir)
         .join("lychnos/memory-v1.json")
 }
@@ -401,6 +417,17 @@ mod tests {
             revision: 3,
             tombstone: false,
         })
+    }
+
+    #[test]
+    fn explicit_memory_path_overrides_data_home_and_home() {
+        let resolved = resolve_memory_path(
+            Some("/tmp/explicit-memory.json".into()),
+            Some("/tmp/data-home".into()),
+            Some("/tmp/home".into()),
+        );
+
+        assert_eq!(resolved, PathBuf::from("/tmp/explicit-memory.json"));
     }
 
     #[test]

@@ -2,135 +2,94 @@
 
 Last updated: 2026-09-26
 
-Purpose: exact operational handoff for the next development chat/session.
-
-Read START-HERE.md and PROJECT-CANON.md before acting on this file.
+Purpose: exact operational handoff for the next development chat/session. Read START-HERE.md and PROJECT-CANON.md first.
 
 ## Current Git State
 
-Branch: feat/phase2-approval-flow
+Branch: `feat/phase2-approval-flow`
 
-Current state after the continuity documentation commit:
+Remote GitHub branch is synchronized through:
 
-- ahead of origin/feat/phase2-approval-flow by 13 commits;
-- the current HEAD is the continuity documentation milestone, titled `Add repository continuity handoff`;
-- the only remaining dirty files are the intentionally preserved WIP initiative/session-context files listed below.
+- `486a945 Add first durable local memory adapter`
+- `2df1cce Add context-triggered live initiative`
+- `63fe5f4 Add repository continuity handoff`
+- `5204b25 Add first capability-aware local brain adapter`
+- `5159bfb Add cross-device intelligence routing`
+- `9f27f85 Add bounded Lychnos initiative model`
+- `11e2c81 Add local Lychnos speech output`
+- `b5db759 Add local push-to-talk speech recognition`
 
-Recent committed milestones before the continuity HEAD:
+Current WIP-UNCOMMITTED files:
 
-- 5204b25 Add first capability-aware local brain adapter
-- 5159bfb Add cross-device intelligence routing
-- 9f27f85 Add bounded Lychnos initiative model
-- 11e2c81 Add local Lychnos speech output
-- b5db759 Add local push-to-talk speech recognition
-- b7e4fd6 Add normalized microphone discovery
-- da4b261 Add typed interaction and Lychnos persona runtime
-- 6e099b6 Add safe pending approval controls
-- f129d30 Add Omarchy install and launch flow
-- 90e4e44 Add click-through Ghost Mode
-- cbb2722 Persist shell preferences
-- b26f049 Connect shell to live presentation state
-- ef5bea0 Add Omarchy minimize and restore integration
-- 21c1fc9 Add shell context menu controls
-- 3011d63 Add canonical expression overlays to shell
+- `ARCHITECTURE.md`
+- `CURRENT-STATE.md`
+- `ROADMAP.md`
+- `crates/lychnos-core/src/interaction.rs`
+- `crates/lychnos-runtime/src/local_brain.rs`
+- `crates/lychnos-runtime/src/main.rs`
+- `crates/lychnos-runtime/src/memory_store.rs`
+- `crates/lychnos-runtime/src/memory_context.rs` (new)
+- `docs/decisions/0050-explicit-memory-capture-and-filtered-recall.md` (new)
 
-## WIP-UNCOMMITTED — Preserve Carefully
+Preserve this WIP carefully. It is the explicit-memory capture + filtered-recall slice described below.
 
-The working tree contains an unfinished session-context/live-initiative slice:
+## GitHub Repository Hygiene Audit — COMPLETE
 
-- M ARCHITECTURE.md
-- M crates/lychnos-runtime/src/local_brain.rs
-- M crates/lychnos-runtime/src/main.rs
-- M prototypes/lychnos-shell/src/main.rs
-- ?? docs/decisions/0048-session-context-and-live-initiative-scheduler.md
+A full GitHub/repo documentation audit was completed before continuing development.
 
-Do not discard these files without reviewing the diff.
+Verified:
 
-Current WIP behavior:
+- remote branches are `main`, `feat/core-bootstrap`, and `feat/phase2-approval-flow`;
+- no older duplicate handoff/handover/canon/continuity files exist in current remote trees;
+- Git history contains no hidden renamed/deleted competing handoff convention;
+- no exact duplicate Markdown documents were found;
+- semantic-overlap scan showed the continuity documents have distinct roles rather than copied content;
+- ADR numbers/titles/bodies had no duplicates;
+- ADR numbering was contiguous through the current series;
+- GitHub issues do not contain a competing project-state/handoff convention;
+- the historical Phase 1 PR is not a second source of current truth;
+- continuity files are present on the GitHub feature branch.
 
-- bounded six-turn/twelve-message session-local conversation history;
-- transient context reused by later conversation turns;
-- transient context reused by initiative proposals;
-- runtime initiative scheduling;
-- 60-second user-quiet guard;
-- unchanged context considered at most once;
-- requires Normal mode and no pending approval;
-- surfaced initiative uses the normal response/TTS path;
-- surfaced initiative is added to transient session context;
-- shell can display initiative responses without taking keyboard focus.
+Result: the repository has one continuity system only:
 
-### Canon-audit conclusion on this WIP
+- `START-HERE.md`
+- `PROJECT-CANON.md`
+- `DEVELOPMENT-HANDOFF.md`
+- `docs/CONTINUITY-PROTOCOL.md`
 
-The scheduler should not be locked exactly as written.
+Do not create additional session-summary/handover files unless this continuity design is deliberately reopened.
 
-Agreed direction:
+## Canon Audit — Agreed Direction
 
-- meaningful context or event change should be the reason Lychnos considers initiative;
-- user idle time should only be an interruption/appropriateness guard;
-- avoid “60 seconds passed, find something to say” behavior;
-- revise ADR 0048 and scheduler logic before committing this slice.
+The project is still following the original Lychnos vision. Several newer choices improve it.
 
-The transient session-history part remains directionally good as long as it stays separate from durable Lychnos memory.
+Locked/keep:
 
-## COMMITTED — Intelligence Architecture
+- free/local intelligence as the no-subscription baseline;
+- capability-aware LocalBrain routing rather than one universal model;
+- optional supported AccountBridge integrations and optional BYOK only;
+- Lychnos-owned identity/persona/memory/permissions/initiative;
+- same Lychnos across desktop, phone, and Pocket bodies;
+- Omarchy as first body adapter, never the core;
+- bounded initiative separate from host-action authority;
+- explicit approval/runtime/audit boundaries;
+- local-first voice and wake-word direction.
 
-The platform-independent core now has capability-aware intelligence routing.
+Course corrections already acted on:
 
-Key concepts:
+- initiative is now context-triggered; silence alone does not generate thoughts;
+- persistent Lychnos-owned memory moved higher in priority;
+- roadmap now acknowledges voice/UI/local AI were deliberately pulled forward for prototype validation;
+- next large product balance is durable memory plus real ambient/read-only context.
 
-- BodyPlatform
-- DeviceCapabilityProfile
-- LocalBrainClass: Tiny / Compact / Standard / Large
-- LocalModelManifest
-- LocalBrainSelectionPolicy
-- IntelligenceSource: Local / AccountBridge / ApiByok
-- IntelligenceRouter
+Still important:
 
-Locked direction:
+- do not let Lychnos become merely a talking orb;
+- ambient collectors/system context must catch up;
+- Game Mode must eventually suspend/unload heavy inference/voice/collector work based on measured impact;
+- provider fallback/degraded brain state should become visible in the shell.
 
-- free/local intelligence is the no-subscription baseline;
-- no one model or inference runtime is universal Lychnos;
-- desktops, phones, macOS, Windows, Android, iOS, and Pocket bodies may use different adapters;
-- AccountBridge is optional where a provider exposes a supported account/subscription mechanism;
-- BYOK API support may exist but is optional and never required for baseline Lychnos;
-- identity, memory, persona, permissions, and initiative must survive provider/model changes.
-
-## COMMITTED — First LocalBrain Adapter
-
-ADR 0047 establishes the first Omarchy/Linux LocalBrain adapter.
-
-Current body-specific implementation:
-
-- llama.cpp local server;
-- loopback-only endpoint;
-- ephemeral local authentication token;
-- child process owned by the Lychnos runtime;
-- ConversationProvider implemented by LocalBrain;
-- InitiativeProvider implemented by LocalBrain;
-- deterministic mock provider remains fallback;
-- model-specific prompt suffix stays outside the core;
-- model-internal think blocks are removed from visible replies.
-
-Current X1 Pro body configuration:
-
-- runtime: llama.cpp
-- model: Qwen/Qwen3-8B-GGUF:Q4_K_M
-- class: Large
-- context: 8192
-- endpoint: 127.0.0.1:18181
-
-This configuration is not universal canon. It is only the current Omarchy/X1 Pro body adapter.
-
-Reference desktop classes currently used by the installer:
-
-- Tiny: Qwen3 0.6B Q8_0
-- Compact: Qwen3 1.7B Q8_0
-- Standard: Qwen3 4B Q4_K_M
-- Large: Qwen3 8B Q4_K_M
-
-Other operating systems, phones, and Pocket bodies may use different runtimes/models behind the same core contracts.
-
-## LIVE-VERIFIED — Current Development Body
+## LIVE-VERIFIED — Development Body
 
 Machine:
 
@@ -140,231 +99,223 @@ Machine:
 - about 60 GiB RAM
 - Omarchy/Linux
 
-Current installed Lychnos state:
+Current normal installed state:
 
-- Runtime: running
-- Shell: running
+- runtime running;
+- shell running;
+- real/default Lychnos memory store restored to empty after disposable tests.
 
-Runtime startup currently confirms:
+Current body-specific brain config:
 
-- Speech-to-text ready: whisper.cpp, multilingual base model
-- Text-to-speech ready: Piper, en_GB-alan-medium
-- Local brain ready: llama.cpp, Qwen/Qwen3-8B-GGUF:Q4_K_M
-- Persona: Lychnos
+- llama.cpp runtime
+- `Qwen/Qwen3-8B-GGUF:Q4_K_M`
+- Large class
+- 8192 context
+- loopback endpoint 127.0.0.1:18181
+- `/no_think` suffix stays adapter-local.
 
-Machine-local brain config lives at ~/.config/lychnos/brain.env.
+Current voice stack:
 
-Current values:
-
-- LYCHNOS_LOCAL_BRAIN_ENABLED=1
-- LYCHNOS_LOCAL_BRAIN_RUNTIME=/home/drec/.local/bin/llama
-- LYCHNOS_LOCAL_BRAIN_MODEL=Qwen/Qwen3-8B-GGUF:Q4_K_M
-- LYCHNOS_LOCAL_BRAIN_PORT=18181
-- LYCHNOS_LOCAL_BRAIN_CONTEXT=8192
-- LYCHNOS_LOCAL_BRAIN_USER_SUFFIX=/no_think
-
-Machine-local voice config lives at ~/.config/lychnos/voice.env.
-
-Current values:
-
-- LYCHNOS_AUDIO_SOURCE_PORT=analog-input-mic
-- LYCHNOS_AUDIO_INPUT_VOLUME_PERCENT=30
+- local Whisper STT, multilingual base model;
+- Piper TTS, `en_GB-alan-medium` baseline voice;
+- X1 Pro microphone source port `analog-input-mic`, input level 30%.
 
 ## LIVE-VERIFIED — Interaction and Voice
 
 Working physical flow:
 
-Push-to-Talk
-→ external microphone
-→ PipeWire capture
-→ local Whisper STT
-→ LocalBrain conversation
-→ shell text response
-→ local Piper TTS
-→ PipeWire playback
+`PTT -> PipeWire capture -> local Whisper -> LocalBrain -> shell text -> local Piper speech`
 
-Verified behaviors:
+Verified:
 
-- PTT press/release works after gesture and recorder-lifecycle fixes;
-- runtime acknowledges microphone state instead of the shell guessing;
-- external microphone route is explicitly configured on the X1 Pro;
-- local Whisper produces real transcripts;
-- LocalBrain produces non-mock conversational replies;
-- Piper produces audible spoken replies;
-- the baseline voice was positively received, though it sounds slightly unusual;
-- temporary voice files are intended to remain ephemeral;
-- pure non-speech Whisper labels such as “upbeat music” are filtered instead of becoming literal user text.
-
-Typed, Push-to-Talk, Wake Word, and Voice Session already share one normalized interaction vocabulary.
+- PTT press/release lifecycle works;
+- runtime-confirmed microphone status;
+- external mic route works;
+- Whisper transcription works;
+- non-speech labels such as `(upbeat music)` are filtered;
+- LocalBrain produces non-mock replies;
+- spoken Lychnos replies play locally;
+- temporary audio is intended to remain ephemeral.
 
 Wake-word activation is not implemented yet.
 
-## COMMITTED — Character and Initiative Boundary
+## COMMITTED — Context-Triggered Initiative (ADR 0048)
 
-Canonical Lychnos persona includes:
+ADR 0048 is accepted, committed, pushed, and GitHub-verified.
 
-- warm;
-- observant;
-- concise;
-- curious;
-- dry-witted;
-- calm under pressure;
-- companion-like conversational style;
-- initiative style that prefers useful silence over chatter.
+Current rule:
 
-The initiative architecture deliberately separates:
+- meaningful context creates an initiative trigger;
+- user idleness only decides whether interruption is appropriate;
+- silence alone does not open a thought opportunity;
+- successful conversation currently creates `ConversationFollowUp`;
+- future collectors/memory may create `DiagnosticChange`, `MemoryCue`, or related triggers;
+- unchanged context is considered at most once;
+- Normal mode + no pending approval + quiet window are required;
+- Game Mode and Disabled suppress initiative;
+- surfaced initiative uses normal response/TTS and has no host-action authority.
 
-thought or observation
-→ maybe surface as text/speech
+Transient LocalBrain session context:
 
-from:
+- six user/assistant turns maximum;
+- runtime-memory only;
+- not durable Lychnos memory.
 
-structured proposed host change
-→ policy/runtime checks
-→ approval where required
-→ restricted host adapter
+## COMMITTED — Durable Local Memory Adapter (ADR 0049)
 
-A proactive thought does not grant system authority.
+ADR 0049 is accepted, committed, pushed, and GitHub-verified.
 
-Game Mode and Disabled suppress initiative.
+Core memory semantics remain backend-independent through `MemoryStore`.
 
-## CANON AUDIT — Agreed Conclusions
+First Omarchy/runtime durable adapter:
 
-A full canon audit was performed immediately before this handoff.
+- versioned local JSON snapshot;
+- default path `~/.local/share/lychnos/memory-v1.json`;
+- missing file means empty store;
+- file created only on first write;
+- file/record schema validation;
+- deterministic ordering;
+- temporary write + sync + atomic rename on current Linux body;
+- owner-only permissions on Unix;
+- rollback if persistence fails;
+- corrupt/unsupported snapshots fail closed;
+- preserves provenance, device/scope, sensitivity, confidence, revision, tombstone.
 
-Conclusion: the project is still following the original vision. Several newer architectural choices are improvements rather than drift.
+The JSON adapter is not final database canon and is not the synchronization protocol.
 
-Keep:
+## WIP-UNCOMMITTED — Explicit Memory Capture + Filtered Recall (ADR 0050)
 
-1. capability-aware LocalBrain architecture;
-2. free/local no-subscription baseline;
-3. optional AccountBridge plus optional BYOK routing;
-4. provider-independent identity/persona/memory/permissions;
-5. bounded initiative separate from host actions;
-6. Omarchy as first adapter, not the core;
-7. existing safety, approval, and audit boundaries;
-8. one Lychnos identity across desktop, phone, and Pocket bodies.
+Current WIP implements the first usable conversational-memory policy.
 
-Course corrections agreed:
+Capture policy:
 
-### Persistent memory moves higher in priority
+- only explicit directives such as `Remember that ...` / `Remember: ...` are persisted;
+- ordinary conversation is not silently stored;
+- explicit memories use kind `user.explicit`, scope `identity`, Standard sensitivity;
+- provenance `conversation.explicit_memory`;
+- source interaction ID stored;
+- exact duplicate text is deduplicated;
+- obvious credential/secret-like memories are refused while encrypted-at-rest memory is unavailable.
 
-Transient session context is useful but is not Lychnos memory.
+Recall policy:
 
-Character without continuity is insufficient.
+- Lychnos filters memory locally before calling any provider;
+- normal recall only uses non-tombstoned Standard-sensitivity `identity` memories;
+- first relevance method is deterministic lexical overlap;
+- broad questions such as `what do you remember about me?` use a bounded recent set;
+- at most 5 memories;
+- at most 1500 total recalled characters;
+- at most 500 chars per memory.
 
-Cross-body Lychnos ultimately depends on durable local memory that belongs to Lychnos rather than whichever brain is active.
+Provider boundary:
 
-### Initiative becomes context-triggered
+- new `ConversationContext` in core;
+- provider receives already-filtered memory excerpts and runtime notices;
+- provider never receives direct `MemoryStore` access;
+- recalled memory is explicitly framed as DATA, not instructions;
+- commands embedded in remembered text must not gain authority;
+- typed and PTT paths share the same memory policy.
 
-Meaningful context/event change should open an initiative consideration window.
+Memory path override:
 
-Idle time should answer “is this a good time to interrupt?” rather than “should I invent something to say?”
+- optional `LYCHNOS_MEMORY_PATH` supported for body-local/testing use;
+- pure regression test proves explicit path wins over XDG/default resolution.
 
-### Ambient awareness must catch up
+## LIVE-VERIFIED — Durable Memory Across Restart
 
-Do not let Lychnos become only a talking AI orb.
+A disposable live test was completed using `/run/user/1000/lychnos/memory-live-test.json`.
 
-The original distinguishing experience remains environmental awareness through explicitly permitted collectors and normalized context.
+Test sequence:
 
-### Game Mode must eventually manage heavy components
+1. started installed Lychnos with the disposable memory path;
+2. startup confirmed 0 records at the temp path;
+3. sent: `Remember that my temporary memory test phrase is cobalt lantern.`;
+4. one durable `user.explicit` record was written;
+5. restarted Lychnos completely on the same temp path;
+6. startup confirmed 1 record;
+7. asked: `What do you remember about my temporary memory test phrase?`;
+8. LocalBrain replied that it remembered `cobalt lantern` as the temporary memory test phrase.
 
-Suppressing speech is not enough.
+This proves recall came from durable Lychnos memory, not the six-turn session history.
 
-Local inference, model residency, wake processing, collectors, diagnostics, and other heavier components may need suspension or unload based on measured gaming/streaming impact.
+Cleanup:
 
-### Brain fallback should be visible
+- disposable temp memory file removed;
+- one accidental test write to the real default path from an earlier override bug was removed only after strict assertions proved it was exactly the known test record;
+- normal Lychnos restarted;
+- normal/default store verified back at 0 records;
+- real memory file absent/empty after cleanup.
 
-If LocalBrain fails and the deterministic mock provider is used, the shell should make the degraded/fallback intelligence state visible.
+## Quality Gate
 
-### Roadmap sequencing needs refresh
+Latest full strict gate for the current WIP:
 
-UI, voice, local AI, approval UI, and provider work were pulled forward from the old later-phase plan.
+- core: 177 tests passed;
+- runtime: 26 tests passed;
+- shell: 5 tests passed;
+- strict Clippy clean.
 
-That was useful prototype validation, not abandonment of the safety-first development rule.
+Important memory tests include:
 
-ROADMAP.md should be updated to describe the actual sequence.
+- explicit directive parsing;
+- secret-like memory refusal;
+- sensitive/tombstoned/unrelated recall exclusion;
+- bounded broad recall;
+- durable reopen;
+- duplicate explicit-memory suppression;
+- explicit path override precedence;
+- memory context framed as data rather than instructions.
 
-## Important Gaps
+## Remaining Memory Work
 
-Near-term gaps include:
+Not implemented yet:
 
-- persistent local memory backend;
-- memory retrieval/context assembly for conversation and initiative;
-- first real read-only ambient collectors;
-- terminal/journal/service context;
-- portable memory synchronization;
-- wake-word activation;
-- additional LocalBrain adapters for Windows, macOS, Android, iOS, and Pocket;
-- portable model catalog mappings for non-llama runtimes;
-- visible intelligence-provider/fallback status in the shell;
-- user-facing intelligence/voice/persona settings;
-- Game Mode performance measurements and heavy-component suspension;
-- persistent security-audit backend;
-- automatic Game Mode detection;
-- restricted real host-action adapters only after the safety boundaries are ready.
+- user-facing memory inspection/listing controls;
+- forgetting/editing/tombstone UX;
+- automatic/inferred memory policy;
+- semantic/embedding retrieval;
+- consolidation/summarization;
+- encrypted-at-rest sensitive-memory handling;
+- AccountBridge/cloud memory disclosure policy;
+- cross-device sync/pairing/conflict resolution;
+- final globally unique memory/device IDs.
 
-## Immediate Next Safe Step
+Do not silently add automatic memory before its privacy policy is deliberately designed.
 
-Before adding another major capability:
+## Next Safe Development Direction
 
-1. preserve the current uncommitted session-context/initiative work;
-2. revise ADR 0048 and scheduler semantics so meaningful context is the trigger and user idleness is only an interruption guard;
-3. refresh ROADMAP.md to reflect the actual development sequence;
-4. move persistent local Lychnos memory into the near-term plan;
-5. choose the next implementation slice while balancing:
-   - durable local memory, and
-   - first real read-only ambient/context collector.
+After committing/pushing ADR 0050, next priority should balance persistence with ambient awareness.
 
-Do not start another LocalBrain/model-selection redesign. The capability-aware intelligence architecture is already the agreed direction.
+Recommended immediate sequence:
+
+1. commit/push the explicit-memory + filtered-recall slice;
+2. add memory inspection/forget controls soon so durable memory remains user-owned and reversible;
+3. begin the first real read-only ambient/context collector;
+4. feed meaningful normalized context into the existing context-triggered initiative boundary;
+5. keep all real host-changing actions behind existing permission/approval/executor/audit boundaries.
+
+For the first ambient collector, prefer a low-privacy-risk, read-only signal before terminal-content monitoring. A good first candidate is failed user-service/system health state, normalized into core events; terminal awareness can follow with explicit scope/privacy design.
 
 ## Resume Verification Commands
 
-At the start of a future development chat:
+At the start of a future chat:
 
 ```bash
 cd /home/drec/Work/lychnos
 git status --short --branch
 git log -15 --oneline
 ~/.local/bin/lychnos status
-tail -n 50 ~/.local/state/lychnos/runtime.log
+tail -n 60 ~/.local/state/lychnos/runtime.log
 ```
 
 Then read:
 
-```text
-START-HERE.md
-PROJECT-CANON.md
-DEVELOPMENT-HANDOFF.md
-CURRENT-STATE.md
-relevant recent ADRs
-```
+- `START-HERE.md`
+- `PROJECT-CANON.md`
+- `DEVELOPMENT-HANDOFF.md`
+- `CURRENT-STATE.md`
+- recent ADRs, especially 0048, 0049, 0050.
 
-For the current WIP, inspect the diff before doing anything else:
+## Documentation Rule
 
-```bash
-git diff -- ARCHITECTURE.md \
-  crates/lychnos-runtime/src/local_brain.rs \
-  crates/lychnos-runtime/src/main.rs \
-  prototypes/lychnos-shell/src/main.rs
-```
-
-Also read:
-
-```text
-docs/decisions/0048-session-context-and-live-initiative-scheduler.md
-```
-
-## Documentation Rule Going Forward
-
-At the end of every meaningful development session:
-
-- update this handoff;
-- update CURRENT-STATE.md and ARCHITECTURE.md when behavior changed;
-- update ROADMAP.md when sequencing changed;
-- create or revise ADRs for lasting architectural choices;
-- record real/manual hardware tests;
-- record dirty and untracked files;
-- record the exact next safe step.
-
-If something would be painful to reconstruct after a chat cap, document it before ending the session.
+At the end of every meaningful development session, update this single handoff file plus CURRENT-STATE/ARCHITECTURE/ROADMAP/ADRs as appropriate. Do not create parallel handover documents.

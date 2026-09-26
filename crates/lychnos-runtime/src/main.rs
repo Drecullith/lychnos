@@ -1,5 +1,6 @@
 mod audio;
 mod local_brain;
+mod memory_context;
 mod memory_store;
 mod stt;
 mod tts;
@@ -159,7 +160,7 @@ fn main() {
             None
         }
     };
-    let _memory_store = match memory_store::JsonFileMemoryStore::open_default() {
+    let mut memory_store = match memory_store::JsonFileMemoryStore::open_default() {
         Ok(store) => {
             println!(
                 "Memory ready · local JSON v1 · {} records · {}",
@@ -196,6 +197,7 @@ fn main() {
             speech_output.as_ref(),
             &provider,
             &persona,
+            &mut memory_store,
             &mut initiative_scheduler,
         );
         enforce_voice_capture_timeout(&mut active_capture);
@@ -203,6 +205,7 @@ fn main() {
             &provider,
             &persona,
             speech_output.as_ref(),
+            &mut memory_store,
             &mut initiative_scheduler,
         );
         process_initiative(
@@ -385,6 +388,7 @@ fn process_voice_control_requests(
     speech_output: Option<&tts::SpeechOutputWorker>,
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
+    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
     initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&voice_control_inbox_path()) {
@@ -514,6 +518,7 @@ fn process_voice_control_requests(
                             speech_output,
                             provider,
                             persona,
+                            memory_store,
                         ) {
                             Ok((transcript, interaction_id)) => {
                                 initiative_scheduler
@@ -586,6 +591,7 @@ fn handle_completed_voice_turn(
     speech_output: Option<&tts::SpeechOutputWorker>,
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
+    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
 ) -> Result<(String, InteractionId), String> {
     let stt = stt.ok_or_else(|| {
         "local STT is not installed; run scripts/install-local-stt.sh".to_string()
@@ -604,7 +610,7 @@ fn handle_completed_voice_turn(
         text.clone(),
     );
 
-    handle_conversation_request(provider, persona, speech_output, &request)?;
+    handle_conversation_request(provider, persona, speech_output, memory_store, &request)?;
 
     Ok((text, interaction_id))
 }
@@ -613,9 +619,16 @@ fn handle_conversation_request(
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
+    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
     request: &ConversationRequest,
 ) -> Result<(), String> {
-    let response = provider.respond(persona, request)?;
+    let context = memory_context::prepare_conversation_context(memory_store.as_mut(), request)?;
+
+    for notice in &context.runtime_notices {
+        println!("Conversation context · {notice}");
+    }
+
+    let response = provider.respond(persona, &context, request)?;
 
     publish_interaction_response(&response)?;
 
@@ -633,6 +646,7 @@ fn process_interaction_requests(
     provider: &local_brain::RuntimeBrain,
     persona: &PersonaProfile,
     speech_output: Option<&tts::SpeechOutputWorker>,
+    memory_store: &mut Option<memory_store::JsonFileMemoryStore>,
     initiative_scheduler: &mut InitiativeScheduler,
 ) {
     for path in sorted_json_files(&interaction_inbox_path()) {
@@ -669,7 +683,8 @@ fn process_interaction_requests(
 
         initiative_scheduler.note_user_activity();
 
-        if let Err(error) = handle_conversation_request(provider, persona, speech_output, &request)
+        if let Err(error) =
+            handle_conversation_request(provider, persona, speech_output, memory_store, &request)
         {
             eprintln!(
                 "Failed to handle interaction {}: {error}",

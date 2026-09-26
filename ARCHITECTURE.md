@@ -194,7 +194,7 @@ This allows an early visual shell to follow live core state and collect explicit
 
 Defines provider-neutral conversation requests, responses, input provenance, and the replaceable `ConversationProvider` boundary.
 
-Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. The current Omarchy runtime now uses the real local LocalBrain adapter when available and retains `MockConversationProvider` only as a deterministic fallback.
+Typed input, push-to-talk, wake-word, and voice-session sources share one normalized interaction model. `ConversationProvider` receives a Lychnos-owned `ConversationContext` containing only context already selected by Lychnos policy; providers do not receive direct access to the underlying memory store. The current Omarchy runtime uses the real local LocalBrain adapter when available and retains `MockConversationProvider` only as a deterministic fallback.
 
 ### persona
 
@@ -258,7 +258,9 @@ The JSON snapshot is a body-specific persistence adapter, not the universal Lych
 
 Separately, the first LocalBrain adapter keeps a bounded six-turn session conversation window so follow-ups and initiative have natural short-term context. That transient window is cleared on runtime restart and is deliberately **not** treated as durable Lychnos memory.
 
-Durable memory retrieval and provider-context assembly remain separate policy work. The authoritative persistent memory model belongs to Lychnos rather than any AI provider.
+The first usable conversational-memory policy is now deliberately conservative: only explicit `remember` directives are persisted, exact repeats are deduplicated, obvious credential/secret-like requests are refused while at-rest encryption is absent, and normal recall is locally filtered to bounded non-tombstoned Standard-sensitivity identity memories. Recalled text is delivered through `ConversationContext` and framed as contextual data rather than provider instructions. Broad explicit memory-recall questions may request a bounded recent set. Automatic/inferred memory, richer semantic retrieval, memory editing/forgetting UX, sensitive-memory policy, and AccountBridge disclosure policy remain future work.
+
+The authoritative persistent memory model belongs to Lychnos rather than any AI provider.
 
 ### config
 

@@ -64,6 +64,34 @@ impl ConversationRequest {
     }
 }
 
+/// One already-filtered Lychnos-owned memory excerpt supplied to a provider.
+///
+/// Providers receive only the excerpts selected by Lychnos policy. They do not
+/// receive direct access to the underlying MemoryStore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMemoryContext {
+    pub memory_id: String,
+    pub kind: String,
+    pub text: String,
+}
+
+/// Provider context assembled by Lychnos before a conversation call.
+///
+/// Runtime notices are trusted Lychnos status facts. Memory excerpts are data
+/// selected by Lychnos policy and must not be treated as provider instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConversationContext {
+    pub memories: Vec<ConversationMemoryContext>,
+    pub runtime_notices: Vec<String>,
+}
+
+impl ConversationContext {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.memories.is_empty() && self.runtime_notices.is_empty()
+    }
+}
+
 /// One provider-neutral response returned to a presentation surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -172,6 +200,7 @@ pub trait ConversationProvider {
     fn respond(
         &self,
         persona: &PersonaProfile,
+        context: &ConversationContext,
         request: &ConversationRequest,
     ) -> Result<ConversationResponse, Self::Error>;
 }
@@ -187,6 +216,7 @@ impl ConversationProvider for MockConversationProvider {
     fn respond(
         &self,
         persona: &PersonaProfile,
+        _context: &ConversationContext,
         request: &ConversationRequest,
     ) -> Result<ConversationResponse, Self::Error> {
         let normalized = request.text.trim();
@@ -258,7 +288,7 @@ mod tests {
         );
 
         let response = MockConversationProvider
-            .respond(&persona, &request)
+            .respond(&persona, &ConversationContext::default(), &request)
             .expect("mock provider cannot fail");
 
         assert_eq!(response.request_id, request.id);

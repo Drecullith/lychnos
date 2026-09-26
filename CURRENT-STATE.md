@@ -442,7 +442,11 @@ Implemented:
 
 The JSON snapshot is the first body-specific persistence adapter, not the final database or synchronization format.
 
-Durable memory capture, relevance retrieval, privacy filtering, and provider-context assembly are not wired yet.
+The first conversational memory policy is now wired end to end: explicit `remember` directives persist Standard-sensitivity identity memories, exact repeats are deduplicated, obvious credential/secret-like requests are refused while encrypted-at-rest memory is unavailable, local lexical relevance selects bounded memory excerpts, and providers receive only filtered `ConversationContext` rather than storage access. Broad explicit memory-recall questions can request the bounded recent identity-memory set. Typed and Push-to-Talk paths use the same policy.
+
+Live restart testing proved an explicit memory persisted to disk, survived a full Lychnos runtime restart, and was recalled correctly by the LocalBrain afterward.
+
+Automatic/inferred memory, memory editing/forgetting controls, richer semantic retrieval/consolidation, sensitive-memory handling, and AccountBridge/cloud disclosure policy are not implemented yet.
 
 ### Configuration
 
@@ -612,7 +616,7 @@ Current expected test counts:
 
 ```text
 Core workspace:       177
-Runtime adapter tests:  17
+Runtime adapter tests:  26
 GTK shell prototype:     5
 ```
 
@@ -683,6 +687,7 @@ Accepted ADRs currently cover:
 0047 First LocalBrain adapter on Omarchy
 0048 Session context and context-triggered live initiative
 0049 First durable local memory adapter
+0050 Explicit memory capture and filtered recall
 ```
 
 ## Intentionally Mocked
@@ -711,7 +716,7 @@ Lychnos does **not** currently have:
 - hardware telemetry
 - production graphical orb/body UI (an isolated Omarchy visual prototype now exists)
 - real OpenAI/ChatGPT provider integration
-- durable memory capture, relevance retrieval, privacy filtering, and conversation/initiative context assembly
+- automatic/inferred memory policy, memory edit/forget controls, richer semantic retrieval/consolidation, sensitive-memory handling, and AccountBridge/cloud memory disclosure policy
 - additional LocalBrain adapters for Windows, macOS, Android, iOS, and Pocket bodies; Omarchy/Linux llama.cpp is now the first working adapter
 - portable model-manifest/package mappings for non-llama runtimes
 - real privileged execution
@@ -770,7 +775,7 @@ Immediate next work remains simulation-first around the now-live presentation bo
 
 Likely next steps:
 
-1. wire conservative durable-memory capture, relevance retrieval, privacy filtering, and context assembly without coupling memory to the active model
+1. add explicit memory inspection/forget controls and keep automatic/inferred memory deferred until its privacy policy is designed
 2. add the first read-only ambient/context collector so initiative can react to meaningful host context rather than conversation alone
 3. define portable model-manifest/catalog mappings for additional OS/mobile/Pocket adapters
 4. add AccountAgentBridge adapters only where providers expose supported subscription/account mechanisms

@@ -101,7 +101,7 @@ This phase should make it possible to exercise Lychnos behavior end to end befor
 
 Near-term Phase 2 priority now favors two foundations that make Lychnos feel persistent and ambient rather than merely conversational:
 
-- complete durable Lychnos-owned memory capture, relevance retrieval, privacy filtering, and context assembly;
+- keep durable Lychnos-owned memory conservative and user-controlled: explicit capture/filtered recall now work; next add inspection/forget controls before considering inferred memory;
 - the first real read-only ambient/context collector, feeding normalized context into the existing initiative and analysis boundaries.
 
 The context-triggered initiative scheduler is intentionally conservative: meaningful context opens a consideration window, while user idleness only determines whether interruption is appropriate.
@@ -166,7 +166,7 @@ Pulled forward and already validated during Phase 2:
 
 Remaining Phase 4 work includes:
 
-- durable memory retrieval/context assembly for intelligence providers;
+- memory inspection/forget controls, richer relevance retrieval/consolidation, sensitive-memory policy, and provider-specific disclosure controls;
 - supported AccountAgentBridge integrations where provider account/subscription mechanisms permit them;
 - optional BYOK provider adapters without making paid APIs a baseline dependency;
 - wake-word activation and longer voice-session behavior;
